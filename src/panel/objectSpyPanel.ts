@@ -230,6 +230,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
     this.postStatus(mapCodegenStatus(this.codegenManager.getStatus()));
     this.postLinkedScenario();
     this.postFeatureFileAvailable(this.featureFilePanel.hasLinkedFile());
+    this.postAiCodeAvailable(this.aiCodePanel.hasCode());
     this.postCode();
     this.postCopilotEnabledState(this.settingsStore.get().copilotEnabled);
   }
@@ -407,6 +408,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
     this.aiCodePanel.clear();
     this.generatedFeaturePanel.clear();
     this.postCodeCorrectness(false);
+    this.postAiCodeAvailable(false);
 
     this.lastReceivedTokens = 0;
     this.tokenEstimateSeq++; // discard any in-flight estimate for the context just wiped
@@ -866,6 +868,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
           `Verify & Fix Code — sending fix request to Copilot model "${settings.copilotModelId}": prompt is ${fixPrompt.length} chars.`
         );
         this.aiCodePanel.startGenerating();
+        this.postAiCodeAvailable(false);
         const cts = new vscode.CancellationTokenSource();
         try {
           const fixed = await this.streamCopilotResponse(fixPrompt, settings.copilotModelId, cts, (chunk) =>
@@ -873,6 +876,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
           );
           code = extractCodeBlock(fixed);
           this.aiCodePanel.finish(code);
+          this.postAiCodeAvailable(true);
         } catch (err) {
           const message = err instanceof CopilotUnavailableError ? err.message : describeError(err);
           this.outputChannel.appendLine(`Verify & Fix Code — Copilot fix request failed: ${message}`);
@@ -895,6 +899,15 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
    * verification failure — since a stale "confirmed" would be misleading. */
   private postCodeCorrectness(confirmed: boolean): void {
     this.webview?.postMessage({ type: 'codeCorrectness', payload: confirmed });
+  }
+
+  /** "Open AI Generated Code" button on the sidebar — shown only once
+   * there's actual AI-generated code in memory to open, in both UI
+   * Automation and API Automation mode; hidden the instant that stops
+   * being true (a fresh generation just started, a fix attempt is
+   * running, or everything's been cleared). */
+  private postAiCodeAvailable(available: boolean): void {
+    this.webview?.postMessage({ type: 'aiCodeAvailable', payload: available });
   }
 
   /** Asks the sidebar webview for its Playwright Code editor's CURRENT
@@ -1150,8 +1163,10 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
     this.aiCodePanel.startGenerating();
     this.webview?.postMessage({ type: 'aiStatus', payload: { state: 'generating' } });
     // Fresh generation incoming — any prior "Code Correctness Confirmed"
-    // was about a now-superseded version of the code.
+    // was about a now-superseded version of the code, and there's no
+    // complete AI-generated code in memory again until it finishes.
     this.postCodeCorrectness(false);
+    this.postAiCodeAvailable(false);
   }
 
   private postLlmChunk(chunk: string): void {
@@ -1161,6 +1176,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
   private postLlmDone(finalCode: string): void {
     this.aiCodePanel.finish(finalCode);
     this.webview?.postMessage({ type: 'aiStatus', payload: { state: 'idle' } });
+    this.postAiCodeAvailable(true);
   }
 
   private postLlmError(message: string): void {
@@ -1228,7 +1244,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
     <summary>Control Panel</summary>
     <div class="section-body">
       <div class="toolbar-row">
-        <button id="linkFeatureBtn" class="btn" title="Browse to a Cucumber .feature file and pick a Scenario/Scenario Outline to link to the generated code">Link Feature File</button>
+        <button id="linkFeatureBtn" class="btn btn-silver" title="Browse to a Cucumber .feature file and pick a Scenario/Scenario Outline to link to the generated code">Link Feature File</button>
         <span id="linkedScenarioBadge" class="linked-scenario-badge" hidden>
           <span id="linkedScenarioText"></span>
           <button id="unlinkScenarioBtn" class="btn-icon-small" title="Unlink this scenario">✕</button>
@@ -1291,7 +1307,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
         <div class="toolbar-row ai-open-row">
           <button id="generateFeatureFileBtn" class="btn btn-silver" title="No feature file to link yet? Record a flow with Start above, then send the recorded Playwright Code (plus anything in the chat box) to the LLM to generate a brand-new BDD Gherkin feature file">Start AI Feature File Generation</button>
           <button id="startAiProcessingBtn" class="btn btn-silver" title="Send the current Playwright Code, Settings (browser/language/version), linked scenario or selected steps, checked Custom md files, and anything in the chat box below to the LLM for AI code generation">Start AI Code Generation</button>
-          <button id="openAiCodeBtn" class="btn btn-silver">Open AI Generated Code</button>
+          <button id="openAiCodeBtn" class="btn btn-silver" hidden>Open AI Generated Code</button>
           <span id="aiStatusLabel" class="llm-status"></span>
         </div>
       </div>
