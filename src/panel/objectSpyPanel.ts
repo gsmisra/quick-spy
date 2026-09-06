@@ -61,14 +61,14 @@ export const OBJECT_SPY_VIEW_ID = 'objectSpy.mainView';
  * been removed entirely as redundant, per an explicit decision to keep
  * native `codegen` as the only path). "Generated Code" streams codegen's
  * output file verbatim; "Link Feature File" ties a Cucumber Gherkin
- * scenario to it (see featureFilePanel.ts); "Generate Gherkin Feature File"
+ * scenario to it (see featureFilePanel.ts); "Start AI Feature File Generation"
  * is the reverse direction for when no .feature file exists yet — it turns
  * a Playwright Codegen recording alone into a brand-new BDD feature file
  * (see generateFeatureFile()/prompts/generate-feature-file.md). AI
  * processing (Copilot) never starts on its own — recording code, checking a
  * "Custom md files" box, or typing in the chat composer only ever stages
  * context; nothing is sent to the LLM until the user explicitly clicks
- * "Start AI Processing" or "Generate Gherkin Feature File", each of which
+ * "Start AI Code Generation" or "Start AI Feature File Generation", each of which
  * bundles its own relevant context together (see
  * runLlmRefinement()/sendToLlm() and generateFeatureFile()).
  */
@@ -88,7 +88,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
   // Copilot request/response lifecycle (runLlmRefinement()); this is purely
   // where the result gets displayed.
   private readonly aiCodePanel: AiCodePanel;
-  // "Generate Gherkin Feature File" — the OPPOSITE direction of the above:
+  // "Start AI Feature File Generation" — the OPPOSITE direction of the above:
   // recorded Playwright Codegen code alone (no linked .feature file
   // needed) turned into a NEW BDD feature file. Its own full-size
   // editor-area panel, same shape as aiCodePanel; see
@@ -105,7 +105,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
   // different one.
   private linkedScenario: LinkedScenario | undefined;
   // API Automation mode's Control Panel request builder, as last sent by
-  // "Start AI Processing"/"Generate Gherkin Feature File" — kept around
+  // "Start AI Code Generation"/"Start AI Feature File Generation" — kept around
   // purely so "Regenerate" (AI Generated Code / Generated Feature File
   // panels, which don't have their own copy of the API form) can replay
   // the same request without the user re-entering it. Never read in UI
@@ -115,7 +115,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
   // checkboxes are currently checked in the webview — kept in sync via the
   // 'selectedInstructionFiles' message every time the user (un)checks one.
   // Purely staged context: checking a box does NOT itself trigger anything
-  // — it's folded in the next time "Start AI Processing" is clicked.
+  // — it's folded in the next time "Start AI Code Generation" is clicked.
   private selectedInstructionFiles: string[] = [];
   // "Token Monitoring" segment — the real token count of the LAST completed
   // LLM response (0 until the first one lands this session), always
@@ -136,7 +136,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
   // starting (or the view closing) can cancel the previous one cleanly
   // instead of leaving two streams writing into the same AI code view.
   private llmCancellation: vscode.CancellationTokenSource | undefined;
-  // Same, but for an in-flight "Generate Gherkin Feature File" request —
+  // Same, but for an in-flight "Start AI Feature File Generation" request —
   // kept separate from llmCancellation so starting one kind of generation
   // never cancels an unrelated one already in flight for the other panel.
   private featureGenCancellation: vscode.CancellationTokenSource | undefined;
@@ -324,7 +324,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
         break;
       case 'selectedInstructionFiles':
         // Purely staged context — checking a box does not itself trigger
-        // anything; it's read fresh the next time "Start AI Processing" is
+        // anything; it's read fresh the next time "Start AI Code Generation" is
         // clicked (sendToLlm()/runLlmRefinement()).
         this.selectedInstructionFiles = message.payload;
         break;
@@ -588,7 +588,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
   // file's checkbox is purely staged context — this.selectedInstructionFiles
   // is kept in sync via the 'selectedInstructionFiles' message on every
   // checkbox change, but nothing is sent to the LLM until the user
-  // explicitly clicks "Start AI Processing" (sendToLlm(), below), same as
+  // explicitly clicks "Start AI Code Generation" (sendToLlm(), below), same as
   // the chat composer's free-text box. This only ever fires while "Link
   // with GitHub Copilot LLM" is on and a model is picked in Settings, which
   // is itself an explicit, one-time opt-in; VS Code's Language Model API
@@ -602,7 +602,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
     this.webview?.postMessage({ type: 'promptFiles', payload: relPaths });
   }
 
-  /** "Start AI Processing" (Control Panel) — the ONLY way AI processing
+  /** "Start AI Code Generation" (Control Panel) — the ONLY way AI processing
    * starts. Bundles everything currently staged: the Playwright Code
    * editor's live content (`code`, including manual edits), whichever
    * Custom md files are checked (`selectedFiles`), anything typed into the
@@ -629,10 +629,10 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
    * Code editor's live content (including manual edits — see
    * requestCurrentPlaywrightCode()), Settings (language/version/browser),
    * the linked Gherkin scenario, and the checked Custom md files. An
-   * explicit, on-demand click, same as "Start AI Processing" — just from
+   * explicit, on-demand click, same as "Start AI Code Generation" — just from
    * the AI Generated Code panel instead of the Control Panel, and without
    * whatever's currently sitting in the chat box (that's specific to
-   * "Start AI Processing"). */
+   * "Start AI Code Generation"). */
   private async regenerateAiCode(): Promise<void> {
     const settings = this.settingsStore.get();
     if (!settings.copilotEnabled || !settings.copilotModelId) {
@@ -648,8 +648,8 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
     await this.runLlmRefinement(instructions, playwrightCode, '', this.lastApiRequestDetails);
   }
 
-  /** "Generate Gherkin Feature File" (Control Panel) — the counterpart to
-   * "Start AI Processing" for when the user has NOT linked a .feature file:
+  /** "Start AI Feature File Generation" (Control Panel) — the counterpart to
+   * "Start AI Code Generation" for when the user has NOT linked a .feature file:
    * sends whatever Playwright Codegen recorded (UI mode) or the API request
    * described in the Control Panel (API mode) — plus anything currently in
    * the chat box — to the LLM with prompts/generate-feature-file.md's
@@ -712,7 +712,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
   /** "Regenerate" (Generated Feature File panel) — re-runs with the
    * Playwright Code editor's live content (UI mode) or the last-sent API
    * request (API mode) at click time; no chat-box text (that's specific to
-   * the Control Panel's "Generate Gherkin Feature File" button — same
+   * the Control Panel's "Start AI Feature File Generation" button — same
    * asymmetry as regenerateAiCode() vs. sendToLlm()). */
   private async regenerateFeatureFile(): Promise<void> {
     const playwrightCode = await this.requestCurrentPlaywrightCode();
@@ -1176,7 +1176,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
    * arrived (vs. a refresh triggered by, say, a Settings change) — the
    * panel uses it to flash the "New code recorded." indicator. Purely
    * informational: a new recording never triggers AI processing on its
-   * own — only "Start AI Processing" does. */
+   * own — only "Start AI Code Generation" does. */
   private postCode(isNewRecording = false): void {
     const settings = this.settingsStore.get();
     this.webview?.postMessage({
@@ -1216,7 +1216,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
 <body>
   <div class="toolbar-row title-row app-title-row">
     <span class="title-group">
-      <span class="title">SOFT-PLAY AI POWERED TEST AUTOMATION PLUGIN</span>
+      <span class="title">TD Securities Agentic Test Automation</span>
       <span id="versionBadge" class="version-badge">v${this.getVersion()}</span>
     </span>
     <button id="settingsBtn" class="btn-icon-top" title="Settings (language, browser, GitHub Copilot)">⚙</button>
@@ -1283,14 +1283,14 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
               <div id="chatMessages" class="chat-messages"></div>
               <div class="chat-input-row">
                 <textarea id="chatInput" class="chat-input" rows="1" placeholder="Add any details for the AI to follow…"></textarea>
-                <button id="chatSendBtn" class="chat-send-btn" title="Add to the request — click 'Start AI Processing' below to actually send" aria-label="Add">➤</button>
+                <button id="chatSendBtn" class="chat-send-btn" title="Add to the request — click 'Start AI Code Generation' below to actually send" aria-label="Add">➤</button>
               </div>
             </div>
           </div>
         </details>
         <div class="toolbar-row ai-open-row">
-          <button id="generateFeatureFileBtn" class="btn btn-silver" title="No feature file to link yet? Record a flow with Start above, then send the recorded Playwright Code (plus anything in the chat box) to the LLM to generate a brand-new BDD Gherkin feature file">Generate Gherkin Feature File</button>
-          <button id="startAiProcessingBtn" class="btn btn-silver" title="Send the current Playwright Code, Settings (browser/language/version), linked scenario or selected steps, checked Custom md files, and anything in the chat box below to the LLM for AI code generation">Start AI Processing</button>
+          <button id="generateFeatureFileBtn" class="btn btn-silver" title="No feature file to link yet? Record a flow with Start above, then send the recorded Playwright Code (plus anything in the chat box) to the LLM to generate a brand-new BDD Gherkin feature file">Start AI Feature File Generation</button>
+          <button id="startAiProcessingBtn" class="btn btn-silver" title="Send the current Playwright Code, Settings (browser/language/version), linked scenario or selected steps, checked Custom md files, and anything in the chat box below to the LLM for AI code generation">Start AI Code Generation</button>
           <button id="openAiCodeBtn" class="btn btn-silver">Open AI Generated Code</button>
           <span id="aiStatusLabel" class="llm-status"></span>
         </div>

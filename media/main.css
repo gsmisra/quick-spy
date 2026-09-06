@@ -11,6 +11,11 @@
 :root {
   --clay-radius: 14px;
   --clay-radius-sm: 10px;
+  /* TD Bank's own brand green — used deliberately as a fixed brand color,
+     not a VS Code theme variable, the same way the API Automation panel's
+     Postman orange is fixed regardless of theme: this is corporate
+     branding, not something a user's color theme should be able to alter. */
+  --td-green: #54b948;
 }
 
 body {
@@ -68,13 +73,14 @@ body.vscode-light .code-editor-wrap {
   font-size: 1.1em;
   letter-spacing: 0.01em;
   line-height: 1.3;
+  color: var(--td-green);
 }
 
 .version-badge {
   font-family: var(--vscode-editor-font-family, monospace);
   font-size: 0.75em;
-  color: var(--vscode-descriptionForeground);
-  background: var(--vscode-badge-background);
+  color: #ffffff;
+  background: var(--td-green);
   padding: 1px 9px;
   border-radius: 10px;
 }
@@ -108,7 +114,7 @@ body.vscode-light .code-editor-wrap {
   border: none;
   border-radius: var(--clay-radius-sm);
   background: var(--vscode-button-secondaryBackground);
-  color: var(--vscode-button-secondaryForeground);
+  color: var(--td-green);
   cursor: pointer;
   transition: transform 0.12s ease, box-shadow 0.12s ease;
 }
@@ -289,7 +295,7 @@ body.vscode-light .code-editor-wrap {
   box-shadow: none;
 }
 
-/* "Start AI Processing" / "Open AI Generated Code" — silver/dark-grey with
+/* "Start AI Code Generation" / "Open AI Generated Code" — silver/dark-grey with
    white text, deliberately distinct from the button palette elsewhere (not
    tied to a VS Code theme variable) so this pair always reads the same
    regardless of theme, matching the explicit ask. */

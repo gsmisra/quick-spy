@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { spawn, ChildProcess } from 'child_process';
+import { spawn, execFile, ChildProcess } from 'child_process';
 import { Language, BrowserChannel } from '../settings/settingsStore';
 
 export type CodegenStatus =
@@ -95,13 +95,35 @@ export class CodegenManager implements vscode.Disposable {
     // navigate to "", which is not the same thing.
     const trimmedUrl = url.trim();
     const normalizedUrl = trimmedUrl ? normalizeUrl(trimmedUrl) : '';
-    const args = [cliPath, 'codegen', `--target=${target}`, `--channel=${channel}`, '-o', this.outputFile];
+    // codegen's CLI has no "launch maximized"/"fullscreen" switch of its
+    // own — the closest, actually-supported lever is `--viewport-size`,
+    // which sizes the *page* (not just the outer window chrome). Matching
+    // it to the user's real primary-monitor resolution is what "opens full
+    // screen and shows the entire webpage in view" concretely means here:
+    // the recorded page fills the whole screen instead of Playwright's own
+    // small (800x600-ish) default. Falls back to a generous 1920x1080 (the
+    // single most common desktop resolution) if the real one can't be
+    // detected — every recording still gets a large viewport either way,
+    // never a silent revert to the tiny default.
+    const { width, height } = await detectPrimaryScreenSize();
+    const args = [
+      cliPath,
+      'codegen',
+      `--target=${target}`,
+      `--channel=${channel}`,
+      `--viewport-size=${width},${height}`,
+      '-o',
+      this.outputFile
+    ];
     if (normalizedUrl) {
       args.push(normalizedUrl);
     }
 
     this.setStatus({ state: 'starting' });
-    this.log(`Starting native Playwright codegen: --target=${target} --channel=${channel}${normalizedUrl ? ' ' + normalizedUrl : ' (no URL — opens blank)'}`);
+    this.log(
+      `Starting native Playwright codegen: --target=${target} --channel=${channel} --viewport-size=${width},${height}` +
+        `${normalizedUrl ? ' ' + normalizedUrl : ' (no URL — opens blank)'}`
+    );
 
     const child = spawn(process.execPath, args, { detached: true, stdio: 'ignore' });
     child.unref();
@@ -237,6 +259,42 @@ function normalizeUrl(input: string): string {
 
 function describeError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+const DEFAULT_SCREEN_SIZE = { width: 1920, height: 1080 };
+
+/** Queries the real primary-monitor resolution via .NET's own
+ * `System.Windows.Forms.Screen` (Windows only — there is no portable,
+ * dependency-free way to ask the OS this from a plain Node.js extension
+ * host process) so codegen's `--viewport-size` can fill the actual screen
+ * instead of guessing. Verified against this exact PowerShell invocation
+ * before relying on it. Never throws: any failure (non-Windows, PowerShell
+ * unavailable, unexpected output, timeout) falls back to
+ * DEFAULT_SCREEN_SIZE, so a recording session is never blocked or delayed
+ * waiting on this. */
+function detectPrimaryScreenSize(): Promise<{ width: number; height: number }> {
+  if (process.platform !== 'win32') {
+    return Promise.resolve(DEFAULT_SCREEN_SIZE);
+  }
+  return new Promise((resolve) => {
+    const script =
+      'Add-Type -AssemblyName System.Windows.Forms; ' +
+      '$b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds; ' +
+      'Write-Output "$($b.Width)x$($b.Height)"';
+    execFile(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command', script],
+      { windowsHide: true, timeout: 5000 },
+      (error, stdout) => {
+        const match = !error ? /(\d+)x(\d+)/.exec(stdout) : null;
+        if (!match) {
+          resolve(DEFAULT_SCREEN_SIZE);
+          return;
+        }
+        resolve({ width: parseInt(match[1], 10), height: parseInt(match[2], 10) });
+      }
+    );
+  });
 }
 
 /**

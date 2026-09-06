@@ -6,7 +6,8 @@ type InboundMessage =
   | { type: 'saveCode'; payload: string }
   | { type: 'regenerate' }
   | { type: 'verifyCode' }
-  | { type: 'currentCodeReport'; payload: string };
+  | { type: 'currentCodeReport'; payload: string }
+  | { type: 'liveEdit'; payload: string };
 
 /**
  * "AI Generated Code" as its own full-size editor-area panel (ViewColumn.Beside),
@@ -185,6 +186,18 @@ export class AiCodePanel implements vscode.Disposable {
     if (message.type === 'currentCodeReport') {
       this.pendingCodeRequestResolve?.(message.payload);
       this.pendingCodeRequestResolve = undefined;
+      return;
+    }
+    if (message.type === 'liveEdit') {
+      // Keeps `this.code` — the source of truth whenever this panel has to
+      // be redrawn from scratch (getHtml(), on a fresh `show()` after the
+      // webview was disposed and recreated) — from ever silently drifting
+      // behind a manual edit the user made but hasn't explicitly done
+      // anything else with yet. Without this, a webview recreated between
+      // an edit and the next action would redraw with the stale
+      // pre-edit text, and a subsequent Save/Regenerate/Verify could
+      // silently act on that stale text instead of the edit.
+      this.code = message.payload;
       return;
     }
     if (message.type === 'saveCode') {
@@ -386,8 +399,12 @@ export class AiCodePanel implements vscode.Disposable {
       // re-renders as they type/backspace/delete -- it'd stay frozen on
       // whatever was last streamed in, silently out of sync with their
       // edits. createCodeEditor() only wires that re-render on 'input' when
-      // a caller explicitly asks for it via onEdit().
-      editor.onEdit(() => {});
+      // a caller explicitly asks for it via onEdit(). Also mirrors every
+      // edit back to the extension host (see 'liveEdit' above) so its own
+      // copy of the code is never stale relative to what's on screen.
+      editor.onEdit(() => {
+        vscode.postMessage({ type: 'liveEdit', payload: editor.getValue() });
+      });
       ${this.status === 'error' ? `statusEl.textContent = 'Error'; statusEl.className = 'status error';` : ''}
 
       copyBtn.addEventListener('click', async () => {
