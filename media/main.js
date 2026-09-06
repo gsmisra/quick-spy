@@ -1300,6 +1300,17 @@
   // the rest of the session, until a different file is linked or VS Code
   // closes. Relabeling makes that persistence discoverable instead of
   // surprising.
+  /** "Open AI Generated Code" — only ever shown once there's actual
+   * AI-generated code in memory to open, in both UI Automation and API
+   * Automation mode; hidden again the moment that stops being true (a
+   * fresh generation just started, a fix attempt is running, or
+   * everything's been cleared). Driven by the extension host's
+   * 'aiCodeAvailable' message — see postAiCodeAvailable() in
+   * objectSpyPanel.ts. */
+  function applyAiCodeAvailable(available) {
+    openAiCodeBtn.hidden = !available;
+  }
+
   function applyFeatureFileAvailable(available) {
     linkFeatureBtn.textContent = available ? 'View Feature File' : 'Link Feature File';
     linkFeatureBtn.title = available
@@ -1355,6 +1366,9 @@
         break;
       case 'featureFileAvailable':
         applyFeatureFileAvailable(message.payload);
+        break;
+      case 'aiCodeAvailable':
+        applyAiCodeAvailable(message.payload);
         break;
       case 'promptFiles':
         renderPromptFiles(message.payload);

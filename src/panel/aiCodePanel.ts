@@ -101,6 +101,13 @@ export class AiCodePanel implements vscode.Disposable {
     this.suggestedBaseName = baseName;
   }
 
+  /** Whether there's currently any AI-generated code in memory — drives the
+   * sidebar's "Open AI Generated Code" button, which stays hidden until
+   * there's actually something to open. */
+  hasCode(): boolean {
+    return this.code.trim().length > 0;
+  }
+
   startGenerating(): void {
     this.status = 'generating';
     this.code = '';
