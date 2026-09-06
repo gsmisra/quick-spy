@@ -1,10 +1,10 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 
-type InboundMessage = { type: 'saveFeature'; payload: string } | { type: 'regenerate' };
+type InboundMessage = { type: 'saveFeature'; payload: string } | { type: 'regenerate' } | { type: 'liveEdit'; payload: string };
 
 /**
- * "Generate Gherkin Feature File" as its own full-size editor-area panel
+ * "Start AI Feature File Generation" as its own full-size editor-area panel
  * (ViewColumn.Beside), mirroring AiCodePanel's shape and behavior exactly
  * (streamed generation, editable Gherkin-highlighted textarea, Copy/Save,
  * Regenerate) but for the OPPOSITE direction of that feature: instead of
@@ -92,6 +92,14 @@ export class GeneratedFeaturePanel implements vscode.Disposable {
   }
 
   private async handleMessage(message: InboundMessage): Promise<void> {
+    if (message.type === 'liveEdit') {
+      // See AiCodePanel's identical handler for why: keeps `this.featureText`
+      // from ever drifting behind a manual edit that hasn't been Saved/
+      // Regenerated yet, so a webview recreated in between redraws with the
+      // actual current text, not stale pre-edit content.
+      this.featureText = message.payload;
+      return;
+    }
     if (message.type === 'saveFeature') {
       const uri = await vscode.window.showSaveDialog({
         defaultUri: vscode.Uri.file('GeneratedFeature.feature'),
@@ -269,8 +277,12 @@ export class GeneratedFeaturePanel implements vscode.Disposable {
       // re-renders as they type/backspace/delete -- it'd stay frozen on
       // whatever was last streamed in, silently out of sync with their
       // edits. createCodeEditor() only wires that re-render on 'input' when
-      // a caller explicitly asks for it via onEdit().
-      editor.onEdit(() => {});
+      // a caller explicitly asks for it via onEdit(). Also mirrors every
+      // edit back to the extension host (see 'liveEdit' above) so its own
+      // copy of the feature text is never stale relative to what's shown.
+      editor.onEdit(() => {
+        vscode.postMessage({ type: 'liveEdit', payload: editor.getValue() });
+      });
       ${this.status === 'error' ? `statusEl.textContent = 'Error'; statusEl.className = 'status error';` : ''}
 
       copyBtn.addEventListener('click', async () => {

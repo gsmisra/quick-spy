@@ -53,7 +53,7 @@
   // API Automation mode — Postman-styled request builder. Switching modes
   // never touches Playwright/codegen state; it only shows/hides which half
   // of the Control Panel is visible (see applyAutomationMode() below) and
-  // changes what "Start AI Processing"/"Generate Gherkin Feature File"
+  // changes what "Start AI Code Generation"/"Start AI Feature File Generation"
   // bundle into their request (see collectApiRequestDetails() and the
   // click handlers further down).
   // ---------------------------------------------------------------------
@@ -63,7 +63,7 @@
     uiModeControls.hidden = isApi;
     apiModeControls.hidden = !isApi;
     // "Playwright Code" is never used in API Automation -- nothing records
-    // it there (no browser is ever launched). "Start AI Processing"/"Open
+    // it there (no browser is ever launched). "Start AI Code Generation"/"Open
     // AI Generated Code" stay put; they read from the API request builder
     // instead in this mode (see collectApiRequestDetails()).
     playwrightCodePanel.hidden = isApi;
@@ -819,7 +819,7 @@
   /** Everything currently in the API request builder, as one structured
    * object -- sent verbatim (minus redaction of secret VALUES, applied
    * server-side, never here) as the "API Request Details" context for
-   * "Start AI Processing" and "Generate Gherkin Feature File" in API mode.
+   * "Start AI Code Generation" and "Start AI Feature File Generation" in API mode.
    * Harmless to compute in UI mode too (the extension host only reads it
    * when settings.automationMode === 'api'). */
   /** Shorthand for reading one Control Panel field's current value by id --
@@ -938,7 +938,7 @@
 
   // ---------------------------------------------------------------------
   // Token Monitoring — recomputed (debounced) on essentially any change
-  // anywhere in the sidebar, using the SAME data "Start AI Processing"
+  // anywhere in the sidebar, using the SAME data "Start AI Code Generation"
   // would actually send; the extension host does the real counting (via
   // the selected model's own tokenizer) and reports back. See
   // updateTokenEstimate()/recordReceivedTokens() in objectSpyPanel.ts.
@@ -1121,7 +1121,7 @@
 
   // AI processing never starts on its own — checking a .md file below,
   // typing in the chat composer, or a fresh Playwright recording all only
-  // ever stage context. Nothing reaches the LLM until "Start AI Processing"
+  // ever stage context. Nothing reaches the LLM until "Start AI Code Generation"
   // is explicitly clicked (see below), which bundles: the current
   // Playwright Code, whichever .md files are checked (selectedPromptFiles()
   // below, read fresh at click time), the linked scenario/selected steps
@@ -1171,7 +1171,7 @@
   // Bundles every staged chat bubble plus whatever's still sitting unsent
   // in the input box (so the user doesn't have to remember to hit ➤ first)
   // into one customInstructions string, then clears the stage so the next
-  // run starts fresh. Shared by both "Start AI Processing" and "Generate
+  // run starts fresh. Shared by both "Start AI Code Generation" and "Generate
   // Gherkin Feature File" — the two only differ in which message type they
   // post and which extension-host method picks it up from there.
   function collectAndClearStagedInstructions() {
@@ -1187,7 +1187,7 @@
     return customInstructions;
   }
 
-  // "Start AI Processing" — the ONLY trigger for AI code generation.
+  // "Start AI Code Generation" — the ONLY trigger for AI code generation.
   // Bundles staged chat instructions, the current Playwright Code, and
   // checked .md files; the extension host adds Settings and the linked
   // scenario/selected steps on its own. `apiDetails` is always included —
@@ -1204,9 +1204,14 @@
         apiDetails: collectApiRequestDetails()
       }
     });
+    // The chat composer was just cleared above -- Token Monitoring's next
+    // reading should reflect that (no staged instructions left), and the
+    // extension host will separately push the real "received" count once
+    // the response completes (see recordReceivedTokens() server-side).
+    scheduleTokenEstimate();
   });
 
-  // "Generate Gherkin Feature File" — for when no .feature file has been
+  // "Start AI Feature File Generation" — for when no .feature file has been
   // linked yet: turns whatever Playwright Codegen recorded (UI mode) or the
   // API request just described above (API mode) — plus staged chat
   // instructions — into a brand-new BDD feature file instead of refined
@@ -1217,6 +1222,7 @@
       type: 'generateFeatureFile',
       payload: { code: playwrightEditor.getValue(), customInstructions, apiDetails: collectApiRequestDetails() }
     });
+    scheduleTokenEstimate();
   });
 
   // Kill All Browsers needs a confirmation, but VS Code webviews don't
@@ -1468,6 +1474,13 @@
       return;
     }
     applyFreshCode(payload);
+    // applyFreshCode() sets the editor's value programmatically
+    // (editor.setValue(...)), which never fires a native 'input'/'change'
+    // event -- the delegated listeners scheduleTokenEstimate() otherwise
+    // relies on would never see a fresh Playwright Codegen recording at
+    // all, leaving Token Monitoring stuck at its last (or initial, all-
+    // zero) reading no matter how much gets recorded.
+    scheduleTokenEstimate();
   }
 
   let newCodeFlashTimer = null;

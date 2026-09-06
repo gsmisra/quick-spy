@@ -19,7 +19,7 @@
       'is', 'lambda', 'nonlocal', 'not', 'or', 'pass', 'raise', 'return', 'try', 'while', 'with',
       'yield', 'self'
     ],
-    // "Generate Gherkin Feature File" panel's own editor — a much smaller
+    // "Start AI Feature File Generation" panel's own editor — a much smaller
     // keyword set than Java/Python's (Gherkin has no expressions/operators
     // of its own), just enough to make Given/When/Then/etc. and the section
     // keywords read clearly against the plain step text around them.
