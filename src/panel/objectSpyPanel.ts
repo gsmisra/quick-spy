@@ -10,7 +10,10 @@ import { GeneratedFeaturePanel } from './generatedFeaturePanel';
 import { CopilotUnavailableError, countModelTokens, extractCodeBlock, sendPrompt } from '../llm/copilotClient';
 import { checkEnvironment } from '../execution/environmentCheck';
 import { executeGeneratedCode } from '../execution/testExecutor';
-import { ApiRequestDetails, buildApiRequestSummary, hasApiRequest } from '../api/apiRequestDetails';
+import { ApiRequestDetails, SecretEncryptor, buildApiRequestSummary, hasApiRequest } from '../api/apiRequestDetails';
+import { readFileCachedSync, readWorkspaceFileCached } from '../cache/fileCache';
+import * as secretVault from '../security/secretVault';
+import { encryptPasswordLiteralsInCode } from '../security/uiPasswordRedactor';
 
 type InboundMessage =
   | { type: 'start'; payload?: string }
@@ -474,14 +477,21 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
 
     const instructions = await this.readInstructionFiles(selectedFiles);
     const builtIn = isApiMode ? readApiAutomationInstructions() : readSeniorQeInstructions();
+    // Same Auto Password Encryption pass the real send would do (see
+    // runLlmRefinement()) — measuring the UN-redacted/un-encrypted prompt
+    // would under- or over-count relative to what's actually sent (an
+    // ENC[v1:...] token plus its decrypt helper is a different length than
+    // the raw plaintext it replaces).
+    const measuredCode = isApiMode ? playwrightCode : (await encryptPasswordLiteralsInCode(this.context, playwrightCode, settings.language)).code;
     const prompt = isApiMode
-      ? buildApiLlmPrompt(
+      ? await buildApiLlmPrompt(
           settings.language,
           settings.languageVersion,
           builtIn,
           instructions,
           apiDetails!,
           customInstructions,
+          this.getEncryptSecret(),
           this.linkedScenario,
           this.currentSuggestedBaseName()
         )
@@ -491,7 +501,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
           settings.browserChannel,
           builtIn,
           instructions,
-          playwrightCode,
+          measuredCode,
           customInstructions,
           this.linkedScenario,
           this.currentSuggestedBaseName()
@@ -707,8 +717,21 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
     this.generatedFeaturePanel.startGenerating();
 
     const builtIn = readFeatureFileGenInstructions();
+    // Auto Password Encryption — same pass as runLlmRefinement(); a feature
+    // file built from a recorded login flow must never quote the real
+    // password either.
+    if (!isApiMode) {
+      playwrightCode = (await encryptPasswordLiteralsInCode(this.context, playwrightCode, settings.language)).code;
+    }
     const prompt = isApiMode
-      ? buildApiFeatureFilePrompt(builtIn, (apiDetails ?? this.lastApiRequestDetails)!, customInstructions.trim(), this.linkedScenario)
+      ? await buildApiFeatureFilePrompt(
+          builtIn,
+          (apiDetails ?? this.lastApiRequestDetails)!,
+          customInstructions.trim(),
+          settings.language,
+          this.getEncryptSecret(),
+          this.linkedScenario
+        )
       : buildFeatureFilePrompt(builtIn, playwrightCode, customInstructions.trim());
     this.outputChannel.appendLine(
       `Sending to Copilot model "${settings.copilotModelId}" for feature-file generation (${isApiMode ? 'API' : 'UI'} mode): ` +
@@ -834,7 +857,13 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
           this.linkedScenario?.featureFilePath,
           pythonCommand,
           settings.automationMode,
-          this.context.extensionUri.fsPath
+          this.context.extensionUri.fsPath,
+          // SOFTPLAY_SECRET_KEY — lets the generated code's own
+          // SecretVault.decrypt()/decrypt_secret() call actually resolve a
+          // credential Auto Password Encryption encrypted (see
+          // security/secretVault.ts). Harmless to always pass: unused by
+          // code with no encrypted values in it.
+          await secretVault.getSecretEnv(this.context)
         );
         this.outputChannel.appendLine(
           `Verify & Fix Code — attempt ${attempt}: ${result.success ? 'PASSED' : 'FAILED'}` +
@@ -875,15 +904,19 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
         }
 
         this.aiCodePanel.setVerifyStatus(`Attempt ${attempt} failed — asking the LLM to fix it…`, 'info');
+        // Auto Password Encryption applies here too — this "original
+        // context" is resent to Copilot on every single fix attempt, so the
+        // real recorded/API credential must never appear in it any more
+        // than in the original request.
         const originalContext = isApiMode
           ? {
               label: 'Original API Request Details (the ground truth for this request — refer back to this if the error suggests one was used incorrectly)',
-              content: this.lastApiRequestDetails ? buildApiRequestSummary(this.lastApiRequestDetails) : '(not available)'
+              content: this.lastApiRequestDetails ? await buildApiRequestSummary(this.lastApiRequestDetails, this.getEncryptSecret()) : '(not available)'
             }
           : {
               label:
-                'Original Playwright Codegen output (real, unmodified recording — the ground truth for which locators and actions are actually correct; refer back to this if the error suggests one was used incorrectly)',
-              content: `\`\`\`${settings.language}\n${this.nativeGeneratedCode}\n\`\`\``
+                'Original Playwright Codegen output (real recording, see note above about credentials — the ground truth for which locators and actions are actually correct; refer back to this if the error suggests one was used incorrectly)',
+              content: `\`\`\`${settings.language}\n${(await encryptPasswordLiteralsInCode(this.context, this.nativeGeneratedCode, settings.language)).code}\n\`\`\``
             };
         const fixPrompt = buildFixPrompt(
           isApiMode ? readApiAutomationInstructions() : readSeniorQeInstructions(),
@@ -1008,14 +1041,26 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
     this.postLlmStart();
 
     const builtIn = isApiMode ? readApiAutomationInstructions() : readSeniorQeInstructions();
+    // Auto Password Encryption — never send a recorded password/credential
+    // literal to Copilot in plaintext (see security/uiPasswordRedactor.ts).
+    // Applied here, once, right before the prompt is built — the sidebar's
+    // own "Generated Code" view keeps showing Codegen's real, unmodified
+    // output regardless (see ObjectSpyPanel's class doc comment).
+    let encryptedCount = 0;
+    if (!isApiMode) {
+      const redacted = await encryptPasswordLiteralsInCode(this.context, playwrightCode, settings.language);
+      playwrightCode = redacted.code;
+      encryptedCount = redacted.count;
+    }
     const prompt = isApiMode
-      ? buildApiLlmPrompt(
+      ? await buildApiLlmPrompt(
           settings.language,
           settings.languageVersion,
           builtIn,
           instructions,
           apiDetails!,
           customInstructions,
+          this.getEncryptSecret(),
           this.linkedScenario,
           this.currentSuggestedBaseName()
         )
@@ -1034,6 +1079,9 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
     // did a response come back?" — check the softPlay Output channel
     // (View -> Output -> softPlay) rather than needing to guess from a
     // stuck "(generating…)" label with no other visible signal.
+    if (encryptedCount > 0) {
+      this.outputChannel.appendLine(`Auto Password Encryption: encrypted ${encryptedCount} credential value(s) before sending to Copilot.`);
+    }
     this.outputChannel.appendLine(
       `Sending to Copilot model "${settings.copilotModelId}" (${isApiMode ? 'API' : 'UI'} mode): target ` +
         `${settings.language} ${settings.languageVersion}, mandatory standard ` +
@@ -1138,17 +1186,29 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
       : this.linkedScenario.pythonModuleName;
   }
 
+  /** Bound `SecretEncryptor` (see api/apiRequestDetails.ts) for this panel's
+   * own `context` — API Automation mode's every prompt-building call site
+   * passes this in so credential-shaped auth fields get encrypted
+   * (softPlay's "Auto Password Encryption") rather than sent in plaintext. */
+  private getEncryptSecret(): SecretEncryptor {
+    return (plaintext: string) => secretVault.encryptSecret(this.context, plaintext);
+  }
+
   private async readInstructionFiles(relPaths: string[]): Promise<{ path: string; content: string }[]> {
     if (!vscode.workspace.workspaceFolders?.length) {
       return [];
     }
-    const decoder = new TextDecoder('utf-8');
     const results: { path: string; content: string }[] = [];
     for (const relPath of relPaths) {
       try {
         const uri = vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri, relPath);
-        const bytes = await vscode.workspace.fs.readFile(uri);
-        results.push({ path: relPath, content: decoder.decode(bytes) });
+        // mtime-checked cache (cache/fileCache.ts) — these files are called
+        // on every debounced token-estimate tick as well as every real send,
+        // so an unedited file skips the read+decode entirely, while an edit
+        // made mid-session (these are user-owned workspace files, unlike the
+        // bundled prompts above) is still picked up on the very next read.
+        const content = await readWorkspaceFileCached(uri);
+        results.push({ path: relPath, content });
       } catch {
         // Skip a file that vanished/moved between listing and sending.
       }
@@ -1588,47 +1648,24 @@ function getNonce(): string {
   return text;
 }
 
-// Read once and cached — this is the built-in "think like a senior UI test
-// automation engineer" refinement standard (try/catch, logger.info/warn/error,
-// explicit visible+enabled waits, zero hardcoded values) sent to the LLM on
-// every refinement, manual or automatic. Lives outside src/ deliberately:
+// This is the built-in "think like a senior UI test automation engineer"
+// refinement standard (try/catch, logger.info/warn/error, explicit
+// visible+enabled waits, zero hardcoded values) sent to the LLM on every
+// refinement, manual or automatic. Lives outside src/ deliberately:
 // .vscodeignore excludes src/**/*.ts from the packaged extension, but this
 // file must ship as plain markdown, not be compiled. Missing/unreadable is a
 // benign "run without the extra standard" fallback, never a hard failure —
 // the reference code and any .github/ project instructions still make it
-// into the prompt either way.
-let cachedSeniorQeInstructions: string | undefined;
+// into the prompt either way. Cached (mtime-checked, see cache/fileCache.ts)
+// rather than re-read from disk on every prompt build.
 function readSeniorQeInstructions(): string {
-  if (cachedSeniorQeInstructions !== undefined) {
-    return cachedSeniorQeInstructions;
-  }
-  try {
-    cachedSeniorQeInstructions = fs.readFileSync(
-      path.join(__dirname, '..', '..', 'prompts', 'senior-qe-instructions.md'),
-      'utf8'
-    );
-  } catch {
-    cachedSeniorQeInstructions = '';
-  }
-  return cachedSeniorQeInstructions;
+  return readFileCachedSync(path.join(__dirname, '..', '..', 'prompts', 'senior-qe-instructions.md'));
 }
 
 // Same pattern as readSeniorQeInstructions() above, for the "Generate
 // Gherkin Feature File" prompt (prompts/generate-feature-file.md) instead.
-let cachedFeatureFileGenInstructions: string | undefined;
 function readFeatureFileGenInstructions(): string {
-  if (cachedFeatureFileGenInstructions !== undefined) {
-    return cachedFeatureFileGenInstructions;
-  }
-  try {
-    cachedFeatureFileGenInstructions = fs.readFileSync(
-      path.join(__dirname, '..', '..', 'prompts', 'generate-feature-file.md'),
-      'utf8'
-    );
-  } catch {
-    cachedFeatureFileGenInstructions = '';
-  }
-  return cachedFeatureFileGenInstructions;
+  return readFileCachedSync(path.join(__dirname, '..', '..', 'prompts', 'generate-feature-file.md'));
 }
 
 /**
@@ -1653,9 +1690,21 @@ function buildFeatureFilePrompt(builtInInstructions: string, playwrightCode: str
     );
   }
 
+  // `playwrightCode` has already had any password/credential literal
+  // replaced with an `ENC[v1:...]` token by Auto Password Encryption (see
+  // security/uiPasswordRedactor.ts) — a feature file describes BEHAVIOR,
+  // not code, so no decrypt helper is needed here; just make sure the
+  // model never treats the token itself as something to reproduce.
   parts.push(
     `\n## Playwright Codegen output to analyze\n\`\`\`\n${playwrightCode}\n\`\`\``
   );
+  if (playwrightCode.includes(secretVault.TOKEN_MARKER)) {
+    parts.push(
+      `\n## Note on \`ENC[v1:...]\` tokens above\nThese are softPlay Auto Password Encryption tokens — encrypted ` +
+        `credentials, not real values. Describe the underlying action in plain business terms only (e.g. "the user ` +
+        `enters their password") — never reproduce, quote, or attempt to decode the token itself in the feature file.`
+    );
+  }
 
   // Deliberately LAST — see buildLlmPrompt()'s identical block for why:
   // placed earlier, this reads as a suggestion easily outweighed by
@@ -1674,20 +1723,42 @@ function buildFeatureFilePrompt(builtInInstructions: string, playwrightCode: str
 
 // Same pattern as readSeniorQeInstructions()/readFeatureFileGenInstructions()
 // above, for API Automation mode's prompts/api-automation-instructions.md.
-let cachedApiAutomationInstructions: string | undefined;
 function readApiAutomationInstructions(): string {
-  if (cachedApiAutomationInstructions !== undefined) {
-    return cachedApiAutomationInstructions;
+  return readFileCachedSync(path.join(__dirname, '..', '..', 'prompts', 'api-automation-instructions.md'));
+}
+
+// "Auto Password Encryption" — the mandatory standard (what an ENC[v1:...]
+// token means and the exact rules for handling it) plus the two
+// language-specific decrypt-helper implementations the LLM is told to copy
+// verbatim into the generated file. See security/secretVault.ts and
+// security/uiPasswordRedactor.ts for where the tokens themselves come from.
+function readPasswordEncryptionStandard(): string {
+  return readFileCachedSync(path.join(__dirname, '..', '..', 'prompts', 'password-encryption-standard.md'));
+}
+function readSecretVaultTemplate(language: 'java' | 'python'): string {
+  const file = language === 'java' ? 'secret-vault-java.txt' : 'secret-vault-python.txt';
+  return readFileCachedSync(path.join(__dirname, '..', '..', 'prompts', file));
+}
+
+/** Appends the Auto Password Encryption standard + decrypt-helper section
+ * to a prompt's `parts`, but ONLY when `content` actually contains at least
+ * one `ENC[` token — a request with no credentials in it stays exactly as
+ * lean as it was before this feature existed, rather than every single
+ * prompt paying for a section it doesn't need. */
+function appendPasswordEncryptionSection(parts: string[], content: string, language: 'java' | 'python'): void {
+  if (!content.includes(secretVault.TOKEN_MARKER)) {
+    return;
   }
-  try {
-    cachedApiAutomationInstructions = fs.readFileSync(
-      path.join(__dirname, '..', '..', 'prompts', 'api-automation-instructions.md'),
-      'utf8'
+  const standard = readPasswordEncryptionStandard();
+  const template = readSecretVaultTemplate(language);
+  if (standard) {
+    parts.push(`\n## Mandatory standard — Auto Password Encryption (encrypted credential(s) present above)\n${standard}`);
+  }
+  if (template) {
+    parts.push(
+      `\n## Decrypt helper — include this exact ${language === 'java' ? 'Java' : 'Python'} code verbatim in the generated file\n\`\`\`${language}\n${template}\n\`\`\``
     );
-  } catch {
-    cachedApiAutomationInstructions = '';
   }
-  return cachedApiAutomationInstructions;
 }
 
 /** API Automation mode's counterpart to buildFeatureFilePrompt() — same
@@ -1696,12 +1767,14 @@ function readApiAutomationInstructions(): string {
  * Codegen output. A linked scenario (if any) is folded in as additional
  * business context per the explicit ask that a linked feature file be
  * handled "the same way" in API mode as in UI mode. */
-function buildApiFeatureFilePrompt(
+async function buildApiFeatureFilePrompt(
   builtInInstructions: string,
   apiDetails: ApiRequestDetails,
   customInstructions: string,
+  language: 'java' | 'python',
+  encryptSecret: SecretEncryptor,
   linkedScenario?: LinkedScenario
-): string {
+): Promise<string> {
   const parts: string[] = [];
 
   if (builtInInstructions) {
@@ -1724,7 +1797,9 @@ function buildApiFeatureFilePrompt(
     );
   }
 
-  parts.push(`\n## API Request Details to analyze\n${buildApiRequestSummary(apiDetails)}`);
+  const apiSummary = await buildApiRequestSummary(apiDetails, encryptSecret);
+  parts.push(`\n## API Request Details to analyze\n${apiSummary}`);
+  appendPasswordEncryptionSection(parts, apiSummary, language);
 
   // Deliberately LAST — see buildLlmPrompt()'s identical block for why.
   if (customInstructions) {
@@ -1748,16 +1823,17 @@ function buildApiFeatureFilePrompt(
  * none — no browser, no codegen, in this mode) and no browser-executable
  * requirement (API automation never launches a browser).
  */
-function buildApiLlmPrompt(
+async function buildApiLlmPrompt(
   language: 'java' | 'python',
   languageVersion: string,
   builtInInstructions: string,
   instructions: { path: string; content: string }[],
   apiDetails: ApiRequestDetails,
   customInstructions: string,
+  encryptSecret: SecretEncryptor,
   linkedScenario?: LinkedScenario,
   suggestedClassName?: string
-): string {
+): Promise<string> {
   const languageName = language === 'java' ? 'Java (JUnit 5, REST Assured)' : 'Python (pytest, requests)';
   const versionGuidance = languageVersionGuidance(language, languageVersion);
   const isPartialSelection = !!linkedScenario && linkedScenario.selectedStepCount < linkedScenario.totalStepCount;
@@ -1800,7 +1876,9 @@ function buildApiLlmPrompt(
     );
   }
 
-  parts.push(`\n## API Request Details — the request to build test automation around\n${buildApiRequestSummary(apiDetails)}`);
+  const apiSummary = await buildApiRequestSummary(apiDetails, encryptSecret);
+  parts.push(`\n## API Request Details — the request to build test automation around\n${apiSummary}`);
+  appendPasswordEncryptionSection(parts, apiSummary, language);
 
   if (linkedScenario) {
     parts.push(
@@ -1874,6 +1952,14 @@ function buildFixPrompt(
   parts.push(`\n## AI-generated code that failed\n\`\`\`${language}\n${brokenCode}\n\`\`\``);
 
   parts.push(`\n## Exact error output from the failed attempt\n\`\`\`\n${errorOutput}\n\`\`\``);
+
+  // Defense in depth: the broken code SHOULD already carry ENC[v1:...]
+  // tokens plus its decrypt helper (both `originalContext.content` and
+  // `brokenCode` are checked, not just one) rather than any plaintext
+  // credential, per the standard given on the original request — restating
+  // it here means a fix attempt can never accidentally drop the decrypt
+  // helper or "simplify" a token back toward plaintext.
+  appendPasswordEncryptionSection(parts, `${originalContext.content}\n${brokenCode}`, language);
 
   parts.push(
     `\n## Task\nFix ONLY what's necessary to resolve this specific error. Do not restructure or rewrite parts of ` +
@@ -2059,9 +2145,17 @@ function buildLlmPrompt(
   // instead would drown out the exclusion instruction (observed in
   // practice: unchecked steps' click/navigation actions got folded back in
   // as "setup" even when no step definition was generated for them).
+  //
+  // `playwrightCode` here is real, unmodified `codegen` output EXCEPT for
+  // one thing: any password/credential-shaped `.fill(...)`/`.type(...)`
+  // literal has already been replaced with an `ENC[v1:...]` token by
+  // "Auto Password Encryption" (see security/uiPasswordRedactor.ts, applied
+  // by the caller before this function ever sees the code) — so the real
+  // plaintext value never reaches this prompt in the first place.
   parts.push(
-    `\n## Reference Playwright-generated code (real, unmodified \`codegen\` output) — match this structure and style, reuse its locators as-is\n\`\`\`${language}\n${playwrightCode}\n\`\`\``
+    `\n## Reference Playwright-generated code (real \`codegen\` output — see note above about credentials) — match this structure and style, reuse its locators as-is\n\`\`\`${language}\n${playwrightCode}\n\`\`\``
   );
+  appendPasswordEncryptionSection(parts, playwrightCode, language);
 
   // "Link Feature file" (Control Panel) — a Gherkin Scenario/Scenario
   // Outline the user picked in the Feature File view. Present only when

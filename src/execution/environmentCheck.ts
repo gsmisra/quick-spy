@@ -2,6 +2,47 @@ import { execFile } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { AutomationMode, Language } from '../settings/settingsStore';
+import { TtlCache } from '../cache/ttlCache';
+
+/**
+ * Caches the outcome of the Java/Maven/Python(+package) environment probe —
+ * local in-memory only, keyed per (language, mode, ...) combination. These
+ * checks are pure `execFile` round-trips (java -version, mvn -version,
+ * python -c "import X", ...) that answer a question which is true for
+ * minutes/hours at a time in practice ("is the JDK on PATH", "is playwright
+ * importable"), so re-running the full probe on every single "Verify & Fix"
+ * click is wasted process-spawn overhead for an answer that hasn't changed.
+ *
+ * Success and failure get different TTLs on purpose: a passing result is
+ * cached longer (SUCCESS_TTL_MS) since a working toolchain rarely stops
+ * working mid-session, while a failing result expires quickly
+ * (FAILURE_TTL_MS) so a user who just installed the missing JDK/package and
+ * clicks "Verify & Fix Code" again isn't stuck looking at a stale failure.
+ */
+const SUCCESS_TTL_MS = 5 * 60_000;
+const FAILURE_TTL_MS = 15_000;
+const environmentCheckCache = new TtlCache<string, EnvironmentCheckResult & { pythonCommand?: string }>(20);
+
+function cached(
+  key: string,
+  compute: () => Promise<EnvironmentCheckResult & { pythonCommand?: string }>
+): Promise<EnvironmentCheckResult & { pythonCommand?: string }> {
+  const hit = environmentCheckCache.get(key);
+  if (hit) {
+    return Promise.resolve(hit);
+  }
+  return compute().then((result) => {
+    environmentCheckCache.set(key, result, result.ok ? SUCCESS_TTL_MS : FAILURE_TTL_MS);
+    return result;
+  });
+}
+
+/** Forces the next environment check (of any kind) to re-probe instead of
+ * serving a cached result — not currently wired to a command, exposed for
+ * an explicit "recheck" affordance and for tests. */
+export function clearEnvironmentCheckCache(): void {
+  environmentCheckCache.clear();
+}
 
 export interface EnvironmentCheckResult {
   ok: boolean;
@@ -53,7 +94,11 @@ function run(
  * extension should silently mutate. On failure, `message` names exactly
  * what's missing and points at the standard way to install it.
  */
-export async function checkJavaEnvironment(): Promise<EnvironmentCheckResult> {
+export function checkJavaEnvironment(): Promise<EnvironmentCheckResult> {
+  return cached('java', checkJavaEnvironmentUncached);
+}
+
+async function checkJavaEnvironmentUncached(): Promise<EnvironmentCheckResult> {
   const java = await run('java', ['-version']);
   if (java.code !== 0) {
     return {
@@ -195,8 +240,17 @@ async function ensureOfflinePythonEnv(
  * the old check-only behavior: report exactly what pip package is missing
  * and the command to install it, installing nothing itself.
  */
-export async function checkPythonEnvironment(
+export function checkPythonEnvironment(
   automationMode: AutomationMode = 'ui',
+  resourcesRoot?: string,
+  storageDir?: string
+): Promise<EnvironmentCheckResult & { pythonCommand?: string }> {
+  const key = `python:${automationMode}:${resourcesRoot ?? ''}:${storageDir ?? ''}`;
+  return cached(key, () => checkPythonEnvironmentUncached(automationMode, resourcesRoot, storageDir));
+}
+
+async function checkPythonEnvironmentUncached(
+  automationMode: AutomationMode,
   resourcesRoot?: string,
   storageDir?: string
 ): Promise<EnvironmentCheckResult & { pythonCommand?: string }> {

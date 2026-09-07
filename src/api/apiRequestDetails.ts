@@ -90,7 +90,12 @@ export function hasApiRequest(details: ApiRequestDetails | undefined): boolean {
   return !!details && details.url.trim().length > 0;
 }
 
-const REDACTED = '(value provided — redacted; reference it via config/env var in the generated code, never hardcode it)';
+/** Encrypts a credential value for embedding in the LLM prompt (see
+ * security/secretVault.ts) — injected rather than imported directly so this
+ * module stays free of any `vscode` dependency, consistent with the rest of
+ * this file. Real call sites (objectSpyPanel.ts) pass
+ * `(plaintext) => secretVault.encryptSecret(context, plaintext)`. */
+export type SecretEncryptor = (plaintext: string) => Promise<string>;
 
 function formatRows(rows: ApiKeyValueRow[]): string {
   if (!rows.length) {
@@ -121,15 +126,17 @@ function formatFormDataRows(rows: ApiFormDataRow[]): string {
 /**
  * Renders the API request as a plain-language summary for the LLM prompt —
  * never the literal secret VALUE of an API key/bearer token/basic-auth
- * password (see REDACTED above): the LLM still needs to know an auth
- * scheme and header/field NAME to generate correct code, but not the real
- * credential, both because it doesn't need it to write correct code (per
- * api-automation-instructions.md's "zero hardcoded secrets" rule, the
- * generated code should reference it via config/env var, not embed it) and
- * because sending real credentials into an LLM request is simply avoided
- * wherever it isn't actually necessary.
+ * password: every credential-shaped field goes through `encryptSecret`
+ * first (softPlay's "Auto Password Encryption" — see security/secretVault.ts),
+ * so what actually reaches the prompt is an opaque `ENC[v1:...]` token, not
+ * the real value. This is stronger than the previous "just tell the LLM to
+ * reference an env var" approach: the generated code comes back already
+ * wired to decrypt the real credential at run time (see
+ * password-encryption-standard.md), so "Verify & Fix Code" can actually
+ * execute it, while the real plaintext never leaves this machine and never
+ * sits in the saved source file either.
  */
-export function buildApiRequestSummary(details: ApiRequestDetails): string {
+export async function buildApiRequestSummary(details: ApiRequestDetails, encryptSecret: SecretEncryptor): Promise<string> {
   const lines: string[] = [];
   lines.push(`Method: ${details.method}`);
   lines.push(`URL: ${details.url}`);
@@ -141,7 +148,7 @@ export function buildApiRequestSummary(details: ApiRequestDetails): string {
   lines.push(formatRows(details.headers));
 
   lines.push(`Authorization: ${authTypeLabel(details.authType)}`);
-  lines.push(...formatAuthFields(details.authType, details.auth));
+  lines.push(...(await formatAuthFields(details.authType, details.auth, encryptSecret)));
 
   lines.push(`Body mode: ${details.bodyMode}`);
   if (details.bodyMode === 'form-data') {
@@ -223,63 +230,64 @@ function authTypeLabel(type: ApiAuthType): string {
 }
 
 /** One line per field of whichever auth type is actually selected — every
- * secret-shaped field (keys, secrets, tokens, passwords) goes through
- * REDACTED, exactly like the original API Key/Bearer/Basic handling did;
- * everything else (usernames, key NAMES, regions, algorithms, header
- * prefixes) is plain, non-secret metadata the LLM needs to generate the
- * right shape of code and is sent as-is. */
-function formatAuthFields(type: ApiAuthType, auth: ApiAuthFields): string[] {
+ * secret-shaped field (keys, secrets, tokens, passwords) is run through
+ * softPlay's Auto Password Encryption (`encryptSecret`) and sent as an
+ * opaque `ENC[v1:...]` token, never the real value; everything else
+ * (usernames, key NAMES, regions, algorithms, header prefixes) is plain,
+ * non-secret metadata the LLM needs to generate the right shape of code and
+ * is sent as-is. */
+async function formatAuthFields(type: ApiAuthType, auth: ApiAuthFields, encryptSecret: SecretEncryptor): Promise<string[]> {
   const notSet = (v: string) => v || '(not set)';
-  const secret = (v: string) => (v ? REDACTED : '(not set)');
+  const secret = async (v: string) => (v ? await encryptSecret(v) : '(not set)');
   switch (type) {
     case 'apikey':
       return [
         `  - Key name: ${notSet(auth.apiKeyName)}`,
-        `  - Value: ${secret(auth.apiKeyValue)}`,
+        `  - Value: ${await secret(auth.apiKeyValue)}`,
         `  - Added to: ${auth.apiKeyAddTo === 'query' ? 'Query Params' : 'Header'}`
       ];
     case 'bearer':
-      return [`  - Token: ${secret(auth.bearerToken)}`];
+      return [`  - Token: ${await secret(auth.bearerToken)}`];
     case 'basic':
-      return [`  - Username: ${notSet(auth.basicUsername)}`, `  - Password: ${secret(auth.basicPassword)}`];
+      return [`  - Username: ${notSet(auth.basicUsername)}`, `  - Password: ${await secret(auth.basicPassword)}`];
     case 'digest':
-      return [`  - Username: ${notSet(auth.digestUsername)}`, `  - Password: ${secret(auth.digestPassword)}`];
+      return [`  - Username: ${notSet(auth.digestUsername)}`, `  - Password: ${await secret(auth.digestPassword)}`];
     case 'oauth1':
       return [
-        `  - Consumer Key: ${secret(auth.oauth1ConsumerKey)}`,
-        `  - Consumer Secret: ${secret(auth.oauth1ConsumerSecret)}`,
-        `  - Access Token: ${secret(auth.oauth1AccessToken)}`,
-        `  - Token Secret: ${secret(auth.oauth1TokenSecret)}`,
+        `  - Consumer Key: ${await secret(auth.oauth1ConsumerKey)}`,
+        `  - Consumer Secret: ${await secret(auth.oauth1ConsumerSecret)}`,
+        `  - Access Token: ${await secret(auth.oauth1AccessToken)}`,
+        `  - Token Secret: ${await secret(auth.oauth1TokenSecret)}`,
         `  - Signature Method: ${notSet(auth.oauth1SignatureMethod)}`
       ];
     case 'oauth2':
-      return [`  - Access Token: ${secret(auth.oauth2AccessToken)}`, `  - Header Prefix: ${notSet(auth.oauth2HeaderPrefix)}`];
+      return [`  - Access Token: ${await secret(auth.oauth2AccessToken)}`, `  - Header Prefix: ${notSet(auth.oauth2HeaderPrefix)}`];
     case 'hawk':
       return [
         `  - Hawk Auth ID: ${notSet(auth.hawkAuthId)}`,
-        `  - Hawk Auth Key: ${secret(auth.hawkAuthKey)}`,
+        `  - Hawk Auth Key: ${await secret(auth.hawkAuthKey)}`,
         `  - Algorithm: ${notSet(auth.hawkAlgorithm)}`
       ];
     case 'awsv4':
       return [
-        `  - Access Key: ${secret(auth.awsAccessKey)}`,
-        `  - Secret Key: ${secret(auth.awsSecretKey)}`,
-        `  - Session Token: ${auth.awsSessionToken ? secret(auth.awsSessionToken) : '(not set — not using temporary credentials)'}`,
+        `  - Access Key: ${await secret(auth.awsAccessKey)}`,
+        `  - Secret Key: ${await secret(auth.awsSecretKey)}`,
+        `  - Session Token: ${auth.awsSessionToken ? await secret(auth.awsSessionToken) : '(not set — not using temporary credentials)'}`,
         `  - AWS Region: ${notSet(auth.awsRegion)}`,
         `  - Service Name: ${notSet(auth.awsServiceName)}`
       ];
     case 'ntlm':
       return [
         `  - Username: ${notSet(auth.ntlmUsername)}`,
-        `  - Password: ${secret(auth.ntlmPassword)}`,
+        `  - Password: ${await secret(auth.ntlmPassword)}`,
         `  - Domain: ${auth.ntlmDomain || '(not set)'}`,
         `  - Workstation: ${auth.ntlmWorkstation || '(not set)'}`
       ];
     case 'edgegrid':
       return [
-        `  - Access Token: ${secret(auth.edgeGridAccessToken)}`,
-        `  - Client Token: ${secret(auth.edgeGridClientToken)}`,
-        `  - Client Secret: ${secret(auth.edgeGridClientSecret)}`
+        `  - Access Token: ${await secret(auth.edgeGridAccessToken)}`,
+        `  - Client Token: ${await secret(auth.edgeGridClientToken)}`,
+        `  - Client Secret: ${await secret(auth.edgeGridClientSecret)}`
       ];
     default:
       return [];

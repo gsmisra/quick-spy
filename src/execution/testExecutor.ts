@@ -34,9 +34,22 @@ const MAX_OUTPUT_CHARS = 6000;
 // `.cmd` launcher on Windows that plain execFile can't locate at all;
 // python/pytest calls stay shell:false since none of their own args here
 // contain spaces either, and false is the safer default regardless).
-function run(command: string, args: string[], cwd: string, shell = false): Promise<{ code: number | null; output: string }> {
+function run(
+  command: string,
+  args: string[],
+  cwd: string,
+  shell = false,
+  extraEnv?: Record<string, string>
+): Promise<{ code: number | null; output: string }> {
   return new Promise((resolve) => {
-    execFile(command, args, { cwd, windowsHide: true, timeout: 180_000, maxBuffer: 20 * 1024 * 1024, shell }, (error, stdout, stderr) => {
+    // `env` omitted (undefined) preserves the exact prior behavior — plain
+    // inheritance of the extension host's own environment — for every
+    // caller that doesn't pass extraEnv; only "Verify & Fix Code" passes it
+    // (see executeGeneratedCode()'s secretEnv param), to hand the AI
+    // generated code's own SecretVault.decrypt()/decrypt_secret() calls the
+    // SOFTPLAY_SECRET_KEY they need (see security/secretVault.ts).
+    const env = extraEnv ? { ...process.env, ...extraEnv } : undefined;
+    execFile(command, args, { cwd, windowsHide: true, timeout: 180_000, maxBuffer: 20 * 1024 * 1024, shell, env }, (error, stdout, stderr) => {
       const output = `${stdout || ''}${stderr || ''}`.trim();
       const code = error ? (typeof error.code === 'number' ? error.code : -1) : 0;
       resolve({ code, output });
@@ -83,11 +96,18 @@ export async function executeGeneratedCode(
   linkedFeatureFilePath: string | undefined,
   pythonCommand: string,
   automationMode: AutomationMode,
-  resourcesRoot?: string
+  resourcesRoot?: string,
+  /** SOFTPLAY_SECRET_KEY (see security/secretVault.ts), handed to the child
+   * process's environment so the generated code's own SecretVault.decrypt()
+   * / decrypt_secret() call — present whenever "Auto Password Encryption"
+   * encrypted at least one credential into the code — can actually resolve
+   * the real value at run time. Harmless to always pass: unused entirely by
+   * code that contains no encrypted values. */
+  secretEnv?: Record<string, string>
 ): Promise<ExecutionResult> {
   return language === 'java'
-    ? executeJava(code, scratchDir, automationMode, resourcesRoot)
-    : executePython(code, scratchDir, linkedFeatureFilePath, pythonCommand, automationMode);
+    ? executeJava(code, scratchDir, automationMode, resourcesRoot, secretEnv)
+    : executePython(code, scratchDir, linkedFeatureFilePath, pythonCommand, automationMode, secretEnv);
 }
 
 function isBddCode(code: string): boolean {
@@ -245,7 +265,8 @@ async function executeJava(
   code: string,
   scratchDir: string,
   automationMode: AutomationMode,
-  resourcesRoot?: string
+  resourcesRoot?: string,
+  secretEnv?: Record<string, string>
 ): Promise<ExecutionResult> {
   const classMatch = code.match(/public\s+class\s+(\w+)/);
   if (!classMatch) {
@@ -278,7 +299,7 @@ async function executeJava(
   // doc comment); UI mode still needs the real `mvn test` run below to
   // know whether the headless browser flow actually passed.
   const repoArgs = bundledMavenRepoArgs(resourcesRoot);
-  const compileResult = await run('mvn', ['-q', '-B', '-Dstyle.color=never', ...repoArgs, 'test-compile'], scratchDir, true);
+  const compileResult = await run('mvn', ['-q', '-B', '-Dstyle.color=never', ...repoArgs, 'test-compile'], scratchDir, true, secretEnv);
   if (compileResult.code !== 0) {
     return { success: false, compileOnly: false, apiCallOutcome: 'not-run', output: tailOutput(compileResult.output) };
   }
@@ -288,7 +309,7 @@ async function executeJava(
     return { success: true, compileOnly: true, apiCallOutcome: 'not-run', output: tailOutput(compileResult.output) };
   }
 
-  const testResult = await run('mvn', ['-q', '-B', '-Dstyle.color=never', ...repoArgs, `-Dtest=${className}`, 'test'], scratchDir, true);
+  const testResult = await run('mvn', ['-q', '-B', '-Dstyle.color=never', ...repoArgs, `-Dtest=${className}`, 'test'], scratchDir, true, secretEnv);
   const combinedOutput = tailOutput(`${compileResult.output}\n${testResult.output}`);
   if (automationMode === 'api') {
     // Compiling cleanly already satisfies "success" here — the live API
@@ -310,7 +331,8 @@ async function executePython(
   scratchDir: string,
   linkedFeatureFilePath: string | undefined,
   pythonCommand: string,
-  automationMode: AutomationMode
+  automationMode: AutomationMode,
+  secretEnv?: Record<string, string>
 ): Promise<ExecutionResult> {
   await fs.promises.mkdir(scratchDir, { recursive: true });
   const scratchFile = path.join(scratchDir, SCRATCH_PY_FILENAME);
@@ -349,7 +371,7 @@ async function executePython(
   // on top of whatever `headless` value the generated code's own
   // `browser_type_launch_args` override sets. API mode has no browser
   // involved at all, so this flag is simply inert there.
-  const testResult = await run(pythonCommand, ['-m', 'pytest', SCRATCH_PY_FILENAME, '-q'], scratchDir);
+  const testResult = await run(pythonCommand, ['-m', 'pytest', SCRATCH_PY_FILENAME, '-q'], scratchDir, false, secretEnv);
   const combinedOutput = tailOutput(testResult.output);
   if (automationMode === 'api') {
     return { success: true, compileOnly: false, apiCallOutcome: testResult.code === 0 ? 'passed' : 'failed', output: combinedOutput };
