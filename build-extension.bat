@@ -33,7 +33,16 @@ if errorlevel 1 goto :fail
 echo.
 echo [4/4] Packaging extension (vsce package)...
 del /q *.vsix >nul 2>&1
-call npx vsce package
+rem `npm run package` (not `npx vsce package`) -- npm scripts run with
+rem node_modules\.bin on PATH, so this resolves the ALREADY-INSTALLED
+rem @vscode/vsce devDependency's own "vsce" binary directly. `npx vsce`
+rem looks for the bare (unscoped, deprecated) "vsce" package instead, which
+rem isn't what's installed here -- npx doesn't find it locally and silently
+rem fetches+installs a separate, stale copy into npm's global npx cache on
+rem EVERY build, which is both slow and (on a locked-down/AV-monitored
+rem machine) prone to failing outright when npx tries to clean up that
+rem temporary install afterward.
+call npm run package
 if errorlevel 1 goto :fail
 
 echo.
