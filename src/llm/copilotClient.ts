@@ -1,4 +1,6 @@
 import * as vscode from 'vscode';
+import * as crypto from 'crypto';
+import { TtlCache } from '../cache/ttlCache';
 
 export interface CopilotModelInfo {
   id: string;
@@ -91,6 +93,33 @@ export interface ModelTokenCount {
   maxInputTokens: number;
 }
 
+/**
+ * Local in-memory cache for `countModelTokens()` — keyed by (model, exact
+ * text), NOT time-derived, since a given model's tokenizer gives the exact
+ * same count for the exact same text every time (this is a deterministic
+ * fact, not something that goes stale like an environment probe). The 200
+ * cap + FIFO eviction bounds memory for a long editing session that touches
+ * many distinct drafts; the 10-minute TTL is just a safety net for the
+ * (currently theoretical) case of Copilot swapping a model's tokenizer
+ * under the same id mid-session, not a "this might change soon" signal.
+ *
+ * Keyed on a SHA-1 of the text rather than the text itself — prompts can run
+ * to many KB, and hashing keeps the Map's key set small regardless of how
+ * large the drafts being measured are.
+ */
+const TOKEN_COUNT_TTL_MS = 10 * 60_000;
+const tokenCountCache = new TtlCache<string, ModelTokenCount>(200);
+
+function tokenCountCacheKey(modelId: string, text: string): string {
+  return `${modelId}:${crypto.createHash('sha1').update(text).digest('hex')}`;
+}
+
+/** Drops every cached token count — not currently wired to a command,
+ * exposed for an explicit "recheck"/testing hook. */
+export function clearTokenCountCache(): void {
+  tokenCountCache.clear();
+}
+
 /** Powers the "Token Monitoring" segment — counts `text` (a prompt about
  * to be sent, or a response just received) against whichever model is
  * currently selected. Returns `undefined` rather than throwing when the
@@ -98,13 +127,20 @@ export interface ModelTokenCount {
  * `countTokens` itself fails — a monitoring feature must never surface as
  * a hard error interrupting the rest of the UI. */
 export async function countModelTokens(modelId: string, text: string, token?: vscode.CancellationToken): Promise<ModelTokenCount | undefined> {
+  const cacheKey = tokenCountCacheKey(modelId, text);
+  const cached = tokenCountCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
   try {
     const model = await findModel(modelId);
     if (!model) {
       return undefined;
     }
     const count = await model.countTokens(text, token);
-    return { count, maxInputTokens: model.maxInputTokens };
+    const result: ModelTokenCount = { count, maxInputTokens: model.maxInputTokens };
+    tokenCountCache.set(cacheKey, result, TOKEN_COUNT_TTL_MS);
+    return result;
   } catch {
     return undefined;
   }

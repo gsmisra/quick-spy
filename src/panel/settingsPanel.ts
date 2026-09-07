@@ -4,7 +4,8 @@ import { listCopilotModels } from '../llm/copilotClient';
 
 type InboundMessage =
   | { type: 'update'; payload: Partial<ObjectSpySettings> }
-  | { type: 'listModels' };
+  | { type: 'listModels' }
+  | { type: 'openArchitectureDoc' };
 
 /**
  * The Settings menu — deliberately a separate webview panel from the main
@@ -67,6 +68,33 @@ export class SettingsPanel implements vscode.Disposable {
     } else if (message.type === 'listModels') {
       const models = await listCopilotModels();
       this.panel?.webview.postMessage({ type: 'models', payload: models });
+    } else if (message.type === 'openArchitectureDoc') {
+      await this.openArchitectureDoc();
+    }
+  }
+
+  /**
+   * "Architecture & Technical Information" — a standalone, self-contained
+   * HTML file (media/architecture.html: inline CSS/SVG only, no external
+   * script/stylesheet/CDN references) opened in the user's own default
+   * browser via `vscode.env.openExternal`, not a second webview panel.
+   * Deliberately NOT a webview: the page is long, image-free but
+   * diagram-heavy, and meant to be read/printed/shared like a normal
+   * document — a real browser tab (with its own zoom, find-in-page, print)
+   * suits that far better than a CSP-constrained VS Code webview, and this
+   * still satisfies "opens a html page locally" since nothing ever leaves
+   * the machine to render it.
+   */
+  private async openArchitectureDoc(): Promise<void> {
+    const docPath = vscode.Uri.joinPath(this.context.extensionUri, 'media', 'architecture.html');
+    try {
+      await vscode.env.openExternal(docPath);
+    } catch (err) {
+      void vscode.window.showErrorMessage(
+        `softPlay: Could not open the Architecture & Technical Information page (${docPath.fsPath}): ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
     }
   }
 
@@ -88,6 +116,14 @@ export class SettingsPanel implements vscode.Disposable {
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>softPlay Settings</title>
   <style>
+    :root {
+      /* TD Bank's own brand green — same fixed (non-theme-derived) color
+         used for the app title bar in the Control Panel (media/main.css's
+         --td-green), reused here so this link reads as the same brand
+         element wherever it appears. */
+      --td-green: #54b948;
+      --td-green-dark: #3f9636;
+    }
     body {
       font-family: var(--vscode-font-family);
       color: var(--vscode-foreground);
@@ -140,6 +176,35 @@ export class SettingsPanel implements vscode.Disposable {
       color: var(--vscode-descriptionForeground);
     }
     .field.disabled { opacity: 0.5; }
+    .architecture-link-row {
+      margin-top: 32px;
+      padding-top: 14px;
+      border-top: 1px solid var(--vscode-panel-border);
+      text-align: center;
+    }
+    .architecture-link {
+      /* -apple-system stack + weight/letter-spacing to match the Control
+         Panel's own TD-green title text (media/main.css's .title), so this
+         reads as the same brand-styled element rather than a generic link. */
+      font-family: -apple-system, BlinkMacSystemFont, var(--vscode-font-family), 'Segoe UI', sans-serif;
+      font-weight: 600;
+      font-size: 0.92em;
+      letter-spacing: 0.01em;
+      color: var(--td-green);
+      background: none;
+      border: none;
+      padding: 4px 2px;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .architecture-link:hover,
+    .architecture-link:focus-visible {
+      color: var(--td-green-dark);
+      text-decoration: underline;
+    }
   </style>
 </head>
 <body>
@@ -201,6 +266,12 @@ export class SettingsPanel implements vscode.Disposable {
 
   <p class="note">Changes apply immediately and persist across VS Code restarts.</p>
 
+  <div class="architecture-link-row">
+    <button type="button" id="architectureLink" class="architecture-link" title="Opens a local HTML page with the full architecture, caching, and LLM integration reference, plus a step-by-step usage guide">
+      📐 Architecture &amp; Technical Information
+    </button>
+  </div>
+
   <script nonce="${nonce}">
     (function () {
       const vscode = acquireVsCodeApi();
@@ -214,6 +285,10 @@ export class SettingsPanel implements vscode.Disposable {
       let pendingModelId = '';
 
       const browserField = document.getElementById('browserField');
+
+      document.getElementById('architectureLink').addEventListener('click', () => {
+        vscode.postMessage({ type: 'openArchitectureDoc' });
+      });
 
       document.querySelectorAll('input[name="browserChannel"]').forEach((radio) => {
         radio.addEventListener('change', () => {

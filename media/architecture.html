@@ -1,0 +1,1045 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>softPlay — Architecture &amp; Technical Information</title>
+<style>
+  :root {
+    --td-green: #54b948;
+    --td-green-dark: #3f9636;
+    --td-green-tint: #eaf7e7;
+    --ink: #1d1d1f;
+    --ink-soft: #55555a;
+    --ink-faint: #86868b;
+    --bg: #f5f5f7;
+    --card: #ffffff;
+    --border: #e6e6ea;
+    --shadow-dark: rgba(0, 0, 0, 0.09);
+    --shadow-light: rgba(255, 255, 255, 0.85);
+    --radius-lg: 24px;
+    --radius-md: 16px;
+    --radius-sm: 10px;
+    --mono: "SF Mono", "Cascadia Code", Consolas, "Courier New", monospace;
+  }
+
+  * { box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  a { color: var(--td-green-dark); }
+
+  /* ---------- Layout shells ---------- */
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 0 28px; }
+
+  nav.topbar {
+    position: sticky; top: 0; z-index: 50;
+    background: rgba(255, 255, 255, 0.78);
+    backdrop-filter: saturate(180%) blur(18px);
+    -webkit-backdrop-filter: saturate(180%) blur(18px);
+    border-bottom: 1px solid var(--border);
+  }
+  nav.topbar .wrap {
+    display: flex; align-items: center; gap: 22px;
+    height: 52px; max-width: 1100px;
+    overflow-x: auto; white-space: nowrap;
+  }
+  nav.topbar .brand { font-weight: 700; color: var(--td-green-dark); margin-right: 6px; flex: none; }
+  nav.topbar a {
+    font-size: 13px; color: var(--ink-soft); text-decoration: none; flex: none;
+    padding: 6px 2px; border-bottom: 2px solid transparent;
+  }
+  nav.topbar a:hover { color: var(--td-green-dark); border-bottom-color: var(--td-green); }
+
+  /* ---------- Hero ---------- */
+  header.hero {
+    padding: 72px 0 56px;
+    text-align: center;
+    background: radial-gradient(ellipse at top, #ffffff 0%, var(--bg) 70%);
+  }
+  .eyebrow {
+    display: inline-block; text-transform: uppercase; font-size: 12px; font-weight: 700;
+    letter-spacing: 0.14em; color: var(--td-green-dark);
+    background: var(--td-green-tint); padding: 5px 14px; border-radius: 999px;
+    margin-bottom: 18px;
+  }
+  h1.headline {
+    font-size: 44px; font-weight: 700; letter-spacing: -0.015em; margin: 0 0 14px;
+  }
+  p.subhead {
+    font-size: 19px; color: var(--ink-soft); max-width: 680px; margin: 0 auto;
+  }
+  .badge-row { margin-top: 28px; display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+  .pill {
+    font-size: 12.5px; font-weight: 600; color: var(--ink-soft);
+    background: var(--card); border: 1px solid var(--border);
+    padding: 6px 14px; border-radius: 999px;
+    box-shadow: 3px 3px 8px var(--shadow-dark), -3px -3px 8px var(--shadow-light);
+  }
+  .pill.on { color: #ffffff; background: var(--td-green); border-color: var(--td-green); }
+
+  /* ---------- Sections ---------- */
+  section { padding: 64px 0; }
+  section.alt { background: #ffffff; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+  .section-head { margin-bottom: 34px; text-align: center; }
+  .section-head h2 { font-size: 30px; font-weight: 700; letter-spacing: -0.01em; margin: 0 0 8px; }
+  .section-head p { color: var(--ink-soft); max-width: 620px; margin: 0 auto; font-size: 15.5px; }
+
+  /* ---------- Clay cards ---------- */
+  .card {
+    background: var(--card);
+    border-radius: var(--radius-lg);
+    box-shadow: 8px 8px 18px var(--shadow-dark), -8px -8px 18px var(--shadow-light);
+    padding: 26px 28px;
+  }
+  .card.tight { padding: 18px 20px; border-radius: var(--radius-md); }
+  .grid { display: grid; gap: 18px; }
+  .grid.cols-2 { grid-template-columns: repeat(2, 1fr); }
+  .grid.cols-3 { grid-template-columns: repeat(3, 1fr); }
+  .grid.cols-4 { grid-template-columns: repeat(4, 1fr); }
+  @media (max-width: 820px) {
+    .grid.cols-2, .grid.cols-3, .grid.cols-4 { grid-template-columns: 1fr; }
+  }
+
+  .card h3 { margin: 0 0 8px; font-size: 16px; }
+  .card .tag {
+    display: inline-block; font-size: 10.5px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.08em; color: var(--td-green-dark); background: var(--td-green-tint);
+    border-radius: 6px; padding: 2px 8px; margin-bottom: 10px;
+  }
+  .card p { margin: 0; color: var(--ink-soft); font-size: 14px; }
+  .card code, code { font-family: var(--mono); background: #f0f0f2; border-radius: 5px; padding: 1px 6px; font-size: 12.5px; }
+
+  /* ---------- Executive summary list ---------- */
+  ul.exec-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; }
+  ul.exec-list li {
+    display: flex; gap: 14px; align-items: flex-start;
+    background: var(--card); border-radius: var(--radius-md); padding: 16px 18px;
+    box-shadow: 5px 5px 12px var(--shadow-dark), -5px -5px 12px var(--shadow-light);
+  }
+  ul.exec-list .num {
+    flex: none; width: 26px; height: 26px; border-radius: 50%; background: var(--td-green); color: #fff;
+    font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center;
+  }
+  ul.exec-list b { color: var(--ink); }
+  ul.exec-list span.desc { color: var(--ink-soft); font-size: 14.5px; }
+
+  /* ---------- Architecture box-diagram (CSS, not raster) ---------- */
+  .diagram { display: flex; flex-direction: column; gap: 10px; align-items: stretch; }
+  .diagram .row { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
+  .diagram .arrow-down {
+    text-align: center; color: var(--ink-faint); font-size: 20px; line-height: 1; margin: -2px 0;
+  }
+  .node {
+    border-radius: var(--radius-sm); padding: 12px 16px; font-size: 13px; text-align: center;
+    box-shadow: 4px 4px 10px var(--shadow-dark), -4px -4px 10px var(--shadow-light);
+    min-width: 150px;
+  }
+  .node b { display: block; font-size: 13.5px; margin-bottom: 2px; }
+  .node span { color: var(--ink-soft); font-size: 11.5px; }
+  .node.host { background: #fbfbfc; border: 1.5px dashed #c9c9cf; box-shadow: none; }
+  .node.webview { background: var(--card); }
+  .node.engine { background: #fff8ec; }
+  .node.cache { background: var(--td-green-tint); border: 1px solid #cdeac6; }
+  .node.external { background: #eef4ff; }
+  .node.cloud { background: #f2eefc; }
+  .node.fs { background: #f3f3f5; }
+
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; justify-content: center; margin-top: 6px; font-size: 12px; color: var(--ink-soft); }
+  .legend .sw { display: inline-block; width: 11px; height: 11px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+
+  /* ---------- Timeline (sequence flows) ---------- */
+  .timeline { position: relative; margin-left: 18px; padding-left: 30px; border-left: 2px solid var(--border); }
+  .tstep { position: relative; padding-bottom: 26px; }
+  .tstep:last-child { padding-bottom: 0; }
+  .tstep .dot {
+    position: absolute; left: -37px; top: 2px; width: 16px; height: 16px; border-radius: 50%;
+    background: var(--td-green); border: 3px solid var(--td-green-tint);
+  }
+  .tstep .lane {
+    display: inline-block; font-size: 10.5px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.06em; color: #fff; background: var(--ink-faint); border-radius: 5px;
+    padding: 1px 7px; margin-bottom: 5px;
+  }
+  .tstep .lane.host { background: #6b6b70; }
+  .tstep .lane.webview { background: #8a8a90; }
+  .tstep .lane.copilot { background: var(--td-green-dark); }
+  .tstep .lane.vscode { background: #3a7bd5; }
+  .tstep .lane.cloud { background: #7a5cd6; }
+  .tstep h4 { margin: 0 0 4px; font-size: 15px; }
+  .tstep p { margin: 0; color: var(--ink-soft); font-size: 13.8px; }
+
+  /* ---------- Tables ---------- */
+  table.ref { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  table.ref th {
+    text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--ink-faint); border-bottom: 1px solid var(--border); padding: 8px 10px;
+  }
+  table.ref td { padding: 9px 10px; border-bottom: 1px solid #f0f0f2; color: var(--ink-soft); vertical-align: top; }
+  table.ref td:first-child, table.ref td.mono { font-family: var(--mono); color: var(--ink); font-size: 12.5px; white-space: nowrap; }
+  table.ref tr:last-child td { border-bottom: none; }
+
+  /* ---------- Function reference (collapsible) ---------- */
+  details.filecard {
+    background: var(--card); border-radius: var(--radius-md); margin-bottom: 12px;
+    box-shadow: 4px 4px 10px var(--shadow-dark), -4px -4px 10px var(--shadow-light);
+    overflow: hidden;
+  }
+  details.filecard summary {
+    cursor: pointer; list-style: none; padding: 14px 20px; font-weight: 600; font-size: 14px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  details.filecard summary::-webkit-details-marker { display: none; }
+  details.filecard summary .path { font-family: var(--mono); font-weight: 600; font-size: 13px; color: var(--ink); }
+  details.filecard summary .role { font-weight: 400; color: var(--ink-faint); font-size: 12.5px; }
+  details.filecard summary::after { content: '▾'; color: var(--td-green-dark); transition: transform 0.15s; }
+  details.filecard[open] summary::after { transform: rotate(180deg); }
+  details.filecard .fnlist { padding: 0 20px 16px; border-top: 1px solid #f0f0f2; }
+  .fn { display: flex; gap: 10px; padding: 8px 0; border-bottom: 1px dashed #f0f0f2; font-size: 13px; }
+  .fn:last-child { border-bottom: none; }
+  .fn .sig { font-family: var(--mono); font-size: 12px; color: var(--td-green-dark); flex: 0 0 auto; white-space: nowrap; }
+  .fn .desc { color: var(--ink-soft); }
+
+  /* ---------- Data flow boundary diagram ---------- */
+  .boundary-wrap { display: flex; align-items: stretch; gap: 8px; justify-content: center; flex-wrap: wrap; }
+  .boundary {
+    border-radius: var(--radius-lg); padding: 22px; width: 340px;
+    box-shadow: 6px 6px 14px var(--shadow-dark), -6px -6px 14px var(--shadow-light);
+  }
+  .boundary.local { background: var(--td-green-tint); border: 1.5px solid #cdeac6; }
+  .boundary.cloud { background: #f2eefc; border: 1.5px solid #ddd3f7; }
+  .boundary h4 { margin: 0 0 12px; font-size: 15px; }
+  .boundary ul { margin: 0; padding-left: 18px; color: var(--ink-soft); font-size: 13.3px; }
+  .boundary ul li { margin-bottom: 6px; }
+  .crossing {
+    align-self: center; text-align: center; font-size: 12px; color: var(--ink-faint); width: 130px;
+  }
+  .crossing .arrow { font-size: 26px; color: var(--td-green-dark); display: block; margin-bottom: 4px; }
+
+  /* ---------- Guide (user-facing) ---------- */
+  section.guide { background: linear-gradient(180deg, #ffffff 0%, var(--bg) 100%); }
+  .mode-title {
+    display: flex; align-items: center; gap: 12px; justify-content: center; margin-bottom: 34px;
+  }
+  .mode-title .emoji { font-size: 34px; }
+  .mode-title h2 { margin: 0; font-size: 28px; }
+
+  .steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 18px; }
+  .step-card {
+    background: var(--card); border-radius: var(--radius-lg); padding: 22px 20px; text-align: center;
+    box-shadow: 6px 6px 14px var(--shadow-dark), -6px -6px 14px var(--shadow-light);
+    position: relative;
+  }
+  .step-card .step-num {
+    position: absolute; top: -14px; left: 50%; transform: translateX(-50%);
+    background: var(--td-green); color: #fff; font-weight: 700; font-size: 13px;
+    width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 3px 8px rgba(84, 185, 72, 0.4);
+  }
+  .step-card .emoji { font-size: 40px; margin: 10px 0 12px; }
+  .step-card h4 { margin: 0 0 8px; font-size: 15.5px; }
+  .step-card p { margin: 0; color: var(--ink-soft); font-size: 13.5px; }
+
+  .glossary { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+  .gl-item {
+    display: flex; gap: 12px; align-items: flex-start; background: var(--card);
+    border-radius: var(--radius-md); padding: 14px 16px;
+    box-shadow: 4px 4px 10px var(--shadow-dark), -4px -4px 10px var(--shadow-light);
+  }
+  .gl-item .emoji { font-size: 22px; flex: none; }
+  .gl-item b { display: block; font-size: 13.5px; margin-bottom: 2px; }
+  .gl-item span { font-size: 13px; color: var(--ink-soft); }
+
+  .callout {
+    background: var(--td-green-tint); border: 1px solid #cdeac6; border-radius: var(--radius-md);
+    padding: 16px 20px; font-size: 13.8px; color: #2f5a2a; display: flex; gap: 10px; align-items: flex-start;
+  }
+  .callout .emoji { font-size: 20px; }
+  .callout.warn { background: #fff6e6; border-color: #f4e2b4; color: #7a5a13; }
+
+  footer {
+    padding: 40px 0 70px; text-align: center; color: var(--ink-faint); font-size: 12.5px;
+  }
+  footer .td { color: var(--td-green-dark); font-weight: 700; }
+
+  h2.inline-h { font-size: 20px; margin: 30px 0 14px; }
+  .muted { color: var(--ink-faint); font-size: 12.5px; }
+</style>
+</head>
+<body>
+
+<nav class="topbar">
+  <div class="wrap">
+    <span class="brand">softPlay</span>
+    <a href="#overview">Overview</a>
+    <a href="#architecture">Architecture</a>
+    <a href="#lifecycle">Request Lifecycle</a>
+    <a href="#caching">Caching</a>
+    <a href="#llm">LLM Integration</a>
+    <a href="#dataflow">Data Flow</a>
+    <a href="#components">Components</a>
+    <a href="#functions">Function Reference</a>
+    <a href="#ui-guide">UI Automation Guide</a>
+    <a href="#api-guide">API Automation Guide</a>
+    <a href="#glossary">Buttons Explained</a>
+    <a href="#faq">Troubleshooting</a>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap">
+    <span class="eyebrow">Architecture &amp; Technical Information</span>
+    <h1 class="headline">softPlay, end to end.</h1>
+    <p class="subhead">
+      A single reference for how this VS Code extension is built, how it caches data locally, how it talks to the
+      GitHub Copilot LLM, and how to use every button on screen — from architect deep-dive to first-time click-through.
+    </p>
+    <div class="badge-row">
+      <span class="pill on">Offline-first</span>
+      <span class="pill">No external cache server</span>
+      <span class="pill">Local system memory only</span>
+      <span class="pill">GitHub Copilot Chat (BYO subscription)</span>
+      <span class="pill">Java + Python</span>
+    </div>
+  </div>
+</header>
+
+<!-- ================= OVERVIEW ================= -->
+<section id="overview">
+  <div class="wrap">
+    <div class="section-head">
+      <h2>Executive Summary</h2>
+      <p>What softPlay is, in five sentences a software architect can act on.</p>
+    </div>
+    <ul class="exec-list">
+      <li><span class="num">1</span><span class="desc"><b>softPlay is a VS Code extension</b> that records browser flows with Playwright Codegen, or a manually-built REST request, and turns either into production-style test code using GitHub Copilot's LLM.</span></li>
+      <li><span class="num">2</span><span class="desc"><b>Two automation modes, one pipeline:</b> UI Automation (Playwright, browser-driven) and API Automation (REST Assured / requests, no browser) share the same settings, caching, and LLM plumbing.</span></li>
+      <li><span class="num">3</span><span class="desc"><b>Nothing runs in the cloud except the LLM call itself.</b> Browser recording, code execution, environment checks, and all caching happen as local child processes / in-process memory on the developer's machine — a deliberate fit for bank/enterprise networks with restricted egress.</span></li>
+      <li><span class="num">4</span><span class="desc"><b>The LLM is never bundled or self-hosted.</b> softPlay borrows the user's own GitHub Copilot Chat subscription via VS Code's standard <code>vscode.lm</code> API — no API keys stored, no separate billing relationship.</span></li>
+      <li><span class="num">5</span><span class="desc"><b>Caching is intentionally simple:</b> three in-memory, TTL-bound caches (no Redis, no disk database) cut down repeated process spawns and repeated LLM token-counting calls, without ever risking a stale answer for something that matters.</span></li>
+      <li><span class="num">6</span><span class="desc"><b>Every credential is encrypted by default</b> — in both modes, with no setting to turn it off. See "Auto Password Encryption" in Components.</span></li>
+    </ul>
+  </div>
+</section>
+
+<!-- ================= ARCHITECTURE ================= -->
+<section id="architecture" class="alt">
+  <div class="wrap">
+    <div class="section-head">
+      <h2>System Architecture</h2>
+      <p>Everything lives inside one VS Code Extension Host process. Webviews render UI; plain TypeScript modules own logic, state, and every outbound child process or network call.</p>
+    </div>
+
+    <div class="card">
+      <div class="diagram">
+        <div class="row">
+          <div class="node host" style="min-width: 620px;"><b>VS Code Extension Host Process</b><span>activated by extension.ts → activate()</span></div>
+        </div>
+        <div class="arrow-down">▼</div>
+        <div class="row">
+          <div class="node fs"><b>SettingsStore</b><span>context.globalState — persisted settings</span></div>
+          <div class="node webview"><b>ObjectSpyPanel</b><span>Control Panel — sidebar WebviewView</span></div>
+        </div>
+        <div class="arrow-down">▼</div>
+        <div class="row">
+          <div class="node webview"><b>SettingsPanel</b><span>webview panel</span></div>
+          <div class="node webview"><b>AiCodePanel</b><span>webview panel</span></div>
+          <div class="node webview"><b>GeneratedFeaturePanel</b><span>webview panel</span></div>
+          <div class="node webview"><b>FeatureFilePanel</b><span>webview panel</span></div>
+        </div>
+        <div class="arrow-down">▼</div>
+        <div class="row">
+          <div class="node engine"><b>CodegenManager</b><span>spawns Playwright codegen CLI</span></div>
+          <div class="node engine"><b>TestExecutor</b><span>spawns pytest / mvn</span></div>
+          <div class="node engine"><b>EnvironmentCheck</b><span>probes java / mvn / python</span></div>
+          <div class="node engine"><b>CopilotClient</b><span>wraps vscode.lm API</span></div>
+        </div>
+        <div class="arrow-down">▼</div>
+        <div class="row">
+          <div class="node cache"><b>TtlCache</b><span>env-check + token-count results</span></div>
+          <div class="node cache"><b>FileCache</b><span>mtime-checked prompt/instruction files</span></div>
+          <div class="node external"><b>Child processes</b><span>Chrome/Edge, pytest, mvn, java, python (local, offline)</span></div>
+          <div class="node cloud"><b>GitHub Copilot Chat ext.</b><span>→ Copilot cloud LLM (network)</span></div>
+        </div>
+      </div>
+      <div class="legend">
+        <span><span class="sw" style="background:#fbfbfc;border:1px solid #c9c9cf;"></span>Process boundary</span>
+        <span><span class="sw" style="background:#fff;border:1px solid var(--border);"></span>Webview UI</span>
+        <span><span class="sw" style="background:#fff8ec;"></span>Local engine module</span>
+        <span><span class="sw" style="background:var(--td-green-tint);"></span>In-memory cache</span>
+        <span><span class="sw" style="background:#eef4ff;"></span>Local OS process</span>
+        <span><span class="sw" style="background:#f2eefc;"></span>Leaves the machine</span>
+      </div>
+    </div>
+
+    <h2 class="inline-h">How ownership is wired</h2>
+    <div class="grid cols-2">
+      <div class="card tight">
+        <span class="tag">Composition root</span>
+        <h3><code>extension.ts</code></h3>
+        <p>On activation, creates one <code>SettingsStore</code> and one <code>ObjectSpyPanel</code>, registers the sidebar view + four commands (<code>objectSpy.openPanel</code>, <code>.start</code>, <code>.stop</code>, <code>.openSettings</code>), and hands both to <code>context.subscriptions</code> so VS Code disposes them cleanly on deactivate.</p>
+      </div>
+      <div class="card tight">
+        <span class="tag">Panel owns panels</span>
+        <h3><code>ObjectSpyPanel</code></h3>
+        <p>The Control Panel is the orchestrator: its constructor instantiates <code>SettingsPanel</code>, <code>AiCodePanel</code>, <code>GeneratedFeaturePanel</code>, and <code>FeatureFilePanel</code>, wires their callbacks, and is the single place prompts get built and Copilot gets called.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= REQUEST LIFECYCLE ================= -->
+<section id="lifecycle">
+  <div class="wrap">
+    <div class="section-head">
+      <h2>Request Lifecycle — "Start AI Code Generation"</h2>
+      <p>The exact call chain from a button click to code appearing on screen, across both automation modes.</p>
+    </div>
+    <div class="card">
+      <div class="timeline">
+        <div class="tstep">
+          <span class="dot"></span><span class="lane webview">Webview</span>
+          <h4>1. User clicks "Start AI Code Generation"</h4>
+          <p>Control Panel's <code>main.js</code> posts <code>{ type: 'startAiProcessing' }</code> with the current Playwright code / API request, chat-box text, and checked custom instruction files.</p>
+        </div>
+        <div class="tstep">
+          <span class="dot"></span><span class="lane host">Extension Host</span>
+          <h4>2. <code>ObjectSpyPanel.handleMessage()</code> routes the message</h4>
+          <p>Reads current <code>SettingsStore.get()</code> (mode, language, model), fetches linked scenario, and calls <code>runLlmRefinement()</code>.</p>
+        </div>
+        <div class="tstep">
+          <span class="dot"></span><span class="lane host">Extension Host</span>
+          <h4>3. Prompt is assembled</h4>
+          <p><code>buildLlmPrompt()</code> (UI mode) or <code>buildApiLlmPrompt()</code> (API mode) concatenates: the bundled standard (<code>readSeniorQeInstructions()</code> / <code>readApiAutomationInstructions()</code>, file-cached), any checked custom <code>.md</code> files (<code>readInstructionFiles()</code>, workspace-file-cached), the linked Gherkin scenario, and the recorded code or API request — user's free-text instructions are appended last so they win any conflict.</p>
+        </div>
+        <div class="tstep">
+          <span class="dot"></span><span class="lane copilot">CopilotClient</span>
+          <h4>4. <code>sendPrompt(modelId, prompt, onChunk, token)</code></h4>
+          <p>Resolves the model via <code>findModel()</code>, wraps the prompt in a single <code>vscode.LanguageModelChatMessage.User(...)</code>, and calls <code>model.sendRequest()</code>.</p>
+        </div>
+        <div class="tstep">
+          <span class="dot"></span><span class="lane vscode">VS Code LM API</span>
+          <h4>5. <code>vscode.lm</code> hands off to GitHub Copilot Chat</h4>
+          <p>The installed Copilot Chat extension owns authentication and the actual network call — softPlay never sees a token or API key.</p>
+        </div>
+        <div class="tstep">
+          <span class="dot"></span><span class="lane cloud">Copilot Cloud</span>
+          <h4>6. The model generates and streams back</h4>
+          <p>Response text arrives as an async-iterable stream (<code>response.text</code>), fragment by fragment.</p>
+        </div>
+        <div class="tstep">
+          <span class="dot"></span><span class="lane host">Extension Host</span>
+          <h4>7. Each fragment is forwarded live</h4>
+          <p><code>onChunk()</code> calls <code>postLlmChunk()</code>, which posts to the webview so the AI Generated Code panel updates character-by-character, not after a long silent wait.</p>
+        </div>
+        <div class="tstep">
+          <span class="dot"></span><span class="lane host">Extension Host</span>
+          <h4>8. On completion</h4>
+          <p><code>extractCodeBlock()</code> pulls the fenced code block out of the full response; <code>AiCodePanel.finish()</code> renders it; <code>recordReceivedTokens()</code> counts the response via the (cached) <code>countModelTokens()</code> and updates the Token Monitoring bar.</p>
+        </div>
+      </div>
+    </div>
+    <p class="muted" style="text-align:center;margin-top:18px;">"Generate Feature File" and "Verify &amp; Fix Code" follow the same shape — different prompt builder, same <code>sendPrompt()</code>/streaming/<code>extractCodeBlock()</code> plumbing.</p>
+  </div>
+</section>
+
+<!-- ================= CACHING ================= -->
+<section id="caching" class="alt">
+  <div class="wrap">
+    <div class="section-head">
+      <h2>Caching Architecture</h2>
+      <p>Local system memory only — no Redis, no external cache service, no data written to disk. Everything below lives in the extension host's own process memory and disappears on window reload.</p>
+    </div>
+
+    <div class="grid cols-3">
+      <div class="card tight">
+        <span class="tag">TtlCache</span>
+        <h3>Environment checks</h3>
+        <p><code>environmentCheck.ts</code> caches <code>checkJavaEnvironment()</code> / <code>checkPythonEnvironment()</code> results. Success: 5 min TTL. Failure: 15 sec TTL, so fixing a missing JDK/package and re-clicking "Verify &amp; Fix" doesn't hit a stale error.</p>
+      </div>
+      <div class="card tight">
+        <span class="tag">TtlCache</span>
+        <h3>LLM token counts</h3>
+        <p><code>copilotClient.ts</code> caches <code>countModelTokens()</code> by <code>sha1(modelId + text)</code>. Deterministic input → deterministic output, so this is a pure win: 200-entry cap, 10 min safety-net TTL.</p>
+      </div>
+      <div class="card tight">
+        <span class="tag">FileCache</span>
+        <h3>Instruction / prompt files</h3>
+        <p><code>fileCache.ts</code> caches the bundled <code>prompts/*.md</code> standards and any user-linked custom <code>.md</code> files, validated against each file's own mtime — an edit is picked up on the very next read.</p>
+      </div>
+    </div>
+
+    <h2 class="inline-h">The generic cache lookup flow</h2>
+    <div class="card">
+      <div class="timeline">
+        <div class="tstep">
+          <span class="dot"></span><span class="lane host">Caller</span>
+          <h4>1. Build a cache key</h4>
+          <p>A short, deterministic string — e.g. <code>"python:ui:&lt;resourcesRoot&gt;:&lt;storageDir&gt;"</code> for environment checks, or <code>"&lt;modelId&gt;:&lt;sha1 of prompt text&gt;"</code> for token counts.</p>
+        </div>
+        <div class="tstep">
+          <span class="dot"></span><span class="lane host">TtlCache.get()</span>
+          <h4>2. Look it up</h4>
+          <p>Expired entries are deleted lazily on read (no background timers running). A hit returns immediately — zero process spawns, zero LLM round-trips.</p>
+        </div>
+        <div class="tstep">
+          <span class="dot"></span><span class="lane host">Miss path</span>
+          <h4>3. Compute for real</h4>
+          <p>Run the actual <code>execFile</code> probe or the actual <code>model.countTokens()</code> call.</p>
+        </div>
+        <div class="tstep">
+          <span class="dot"></span><span class="lane host">TtlCache.set()</span>
+          <h4>4. Store and bound</h4>
+          <p>Written with its TTL. If the cache is already at its size cap, the oldest-inserted entry is evicted first (simple FIFO, not full LRU) — memory can never grow unbounded across a long editing session.</p>
+        </div>
+      </div>
+    </div>
+
+    <table class="ref" style="margin-top:26px;">
+      <tr><th>Cache</th><th>Key</th><th>TTL</th><th>Size cap</th><th>Why this shape</th></tr>
+      <tr><td class="mono">env:java</td><td>fixed string</td><td>5 min / 15 sec</td><td>20 entries total</td><td>Toolchain presence rarely changes mid-session; failures should un-stick fast</td></tr>
+      <tr><td class="mono">env:python</td><td>mode + resourcesRoot + storageDir</td><td>5 min / 15 sec</td><td>shared with java</td><td>Same reasoning, keyed per automation mode</td></tr>
+      <tr><td class="mono">tokens</td><td>modelId + sha1(text)</td><td>10 min</td><td>200 entries</td><td>Deterministic tokenizer output — TTL is a safety net, not a freshness requirement</td></tr>
+      <tr><td class="mono">bundled prompt files</td><td>absolute file path</td><td>until mtime changes</td><td>3 files</td><td>Ships with the extension; only changes on reinstall/update</td></tr>
+      <tr><td class="mono">workspace instruction files</td><td>file URI</td><td>until mtime changes</td><td>unbounded (small, user-controlled set)</td><td>User-owned files, actively edited mid-session — correctness over speed</td></tr>
+    </table>
+  </div>
+</section>
+
+<!-- ================= LLM INTEGRATION ================= -->
+<section id="llm">
+  <div class="wrap">
+    <div class="section-head">
+      <h2>LLM Integration Details</h2>
+      <p>softPlay never talks to an LLM provider directly. It exclusively uses VS Code's built-in Language Model API, which in turn is served by whichever GitHub Copilot Chat models the user's own subscription exposes.</p>
+    </div>
+
+    <div class="grid cols-2">
+      <div class="card">
+        <span class="tag">Discovery</span>
+        <h3><code>vscode.lm.selectChatModels({ vendor: 'copilot' })</code></h3>
+        <p>Called by <code>listCopilotModels()</code> to populate the Model dropdown in Settings, and by <code>findModel()</code> every time a request needs to resolve an id to a live <code>LanguageModelChat</code> handle. Never hardcodes a model list — whatever Copilot exposes today is what shows up.</p>
+      </div>
+      <div class="card">
+        <span class="tag">Generation</span>
+        <h3><code>LanguageModelChat.sendRequest(messages, options, token)</code></h3>
+        <p>Called by <code>sendPrompt()</code> with a single <code>LanguageModelChatMessage.User(prompt)</code>. Returns a response whose <code>.text</code> is an async-iterable stream, consumed with <code>for await</code> and forwarded chunk-by-chunk to the UI.</p>
+      </div>
+      <div class="card">
+        <span class="tag">Token accounting</span>
+        <h3><code>LanguageModelChat.countTokens(text, token)</code></h3>
+        <p>Called by <code>countModelTokens()</code> (cached — see above) to power the Token Monitoring bar, using the model's own real tokenizer rather than a character-count guess, plus <code>model.maxInputTokens</code> for the context-window ceiling.</p>
+      </div>
+      <div class="card">
+        <span class="tag">Failure handling</span>
+        <h3><code>CopilotUnavailableError</code></h3>
+        <p>Thrown when no model resolves (Copilot Chat not installed, not signed in, or no models exposed) — surfaced as a clear status message rather than a raw stack trace anywhere the AI features are triggered.</p>
+      </div>
+    </div>
+
+    <div class="callout" style="margin-top:24px;">
+      <span class="emoji">🔐</span>
+      <span>VS Code shows its own one-time consent dialog the first time any extension calls the Language Model API in a session — softPlay does not, and cannot, bypass that gate.</span>
+    </div>
+  </div>
+</section>
+
+<!-- ================= DATA FLOW ================= -->
+<section id="dataflow" class="alt">
+  <div class="wrap">
+    <div class="section-head">
+      <h2>Data Flow &amp; Security Boundary</h2>
+      <p>What stays on the developer's machine, and the one thing that ever leaves it.</p>
+    </div>
+    <div class="boundary-wrap">
+      <div class="boundary local">
+        <h4>🖥️ Stays on the local machine</h4>
+        <ul>
+          <li>Recorded Playwright code (Codegen writes to a temp file, polled and streamed locally)</li>
+          <li>Every child process: Chrome/Edge, <code>pytest</code>, <code>mvn</code>, <code>java</code>, <code>python</code></li>
+          <li>All three caches (environment checks, token counts, instruction files)</li>
+          <li>Settings (<code>context.globalState</code>) and saved test files</li>
+          <li>Environment probing (java/mvn/python version + package checks)</li>
+          <li>Every real password/token/API key value — Auto Password Encryption turns it into an <code>ENC[...]</code> token before anything is built or sent (see Components)</li>
+        </ul>
+      </div>
+      <div class="crossing">
+        <span class="arrow">➜</span>
+        Only the assembled prompt text (and the model's reply) crosses this line
+      </div>
+      <div class="boundary cloud">
+        <h4>☁️ Sent to GitHub Copilot's cloud</h4>
+        <ul>
+          <li>The full prompt: recorded/API code, bundled + custom instructions, linked scenario, and chat-box text</li>
+          <li>Any credential-shaped value in that prompt is already an encrypted <code>ENC[...]</code> token, never the real value</li>
+          <li>Governed entirely by the user's own GitHub Copilot subscription and GitHub's data-handling policy</li>
+          <li>Only when "Link with GitHub Copilot LLM" is switched on — off by default</li>
+        </ul>
+      </div>
+    </div>
+    <div class="callout warn" style="margin-top:22px;">
+      <span class="emoji">⚠️</span>
+      <span>Auto Password Encryption catches credential-<i>shaped</i> fields automatically, but it's a heuristic, not a guarantee — avoid pasting real production data (customer PII, production passwords) into recorded flows or the API request builder as a matter of policy, non-credential fields included.</span>
+    </div>
+  </div>
+</section>
+
+<!-- ================= COMPONENTS ================= -->
+<section id="components">
+  <div class="wrap">
+    <div class="section-head">
+      <h2>Component Reference</h2>
+      <p>One row per module — its job, and what it never does.</p>
+    </div>
+
+    <div class="card" style="margin-bottom:30px;">
+      <span class="tag">Feature — Auto Password Encryption</span>
+      <h3 style="font-size:19px;">Every credential, encrypted by default — UI Automation and API Automation alike</h3>
+      <p>
+        Any password typed into a recorded browser flow, or entered into <b>any</b> of the API Automation
+        Authorization tab's auth types (API Key, Bearer, Basic, Digest, OAuth 1.0/2.0, Hawk, AWS Signature, NTLM,
+        Akamai EdgeGrid), is encrypted locally the instant softPlay touches it — before it is ever included in a
+        Copilot prompt, and before it is written into the saved AI Generated Code file. There is no setting to turn
+        this off: it is the standard behavior for both automation modes. A matching decrypt call — plus, for Python,
+        a small bundled pure-Python AES implementation, so no <code>pip install</code> is ever required — is added
+        to the generated file automatically, so the test still actually runs.
+      </p>
+      <div class="grid cols-4" style="margin-top:18px;">
+        <div class="card tight">
+          <span class="tag">Algorithm</span>
+          <p>AES-256-CTR + HMAC-SHA256, Encrypt-then-MAC, with independently derived cipher/MAC keys. Natively available in Node, the JDK, and (via a bundled implementation) Python — zero extra dependencies to install offline.</p>
+        </div>
+        <div class="card tight">
+          <span class="tag">Key storage</span>
+          <p>One 32-byte key per install, generated once and held in VS Code's own <code>SecretStorage</code> — OS-keychain-backed (Windows Credential Manager / macOS Keychain / libsecret) — never a hardcoded key, never a plain file.</p>
+        </div>
+        <div class="card tight">
+          <span class="tag">Token format</span>
+          <p><code>ENC[v1:iv:tag:ciphertext]</code> — self-describing and base64, safe to embed directly as a Java or Python string literal with no escaping.</p>
+        </div>
+        <div class="card tight">
+          <span class="tag">Runtime key delivery</span>
+          <p><code>SOFTPLAY_SECRET_KEY</code> environment variable — set automatically for "Verify &amp; Fix Code"; a real CI/CD pipeline supplies it from its own secrets manager (Vault, CyberArk, Azure Key Vault, ...) instead.</p>
+        </div>
+      </div>
+
+      <div class="diagram" style="margin-top:22px;">
+        <div class="row">
+          <div class="node webview"><b>Recorded password</b><span>UI Automation fill/type, or an API Automation Authorization field</span></div>
+        </div>
+        <div class="arrow-down">▼</div>
+        <div class="row">
+          <div class="node cache"><b>Encrypted locally</b><span>AES-256-CTR + HMAC-SHA256 — before anything is sent anywhere</span></div>
+        </div>
+        <div class="arrow-down">▼</div>
+        <div class="row">
+          <div class="node cloud"><b>ENC[v1:...] token</b><span>sent to Copilot in the prompt AND saved in the generated file — never the real value</span></div>
+        </div>
+        <div class="arrow-down">▼</div>
+        <div class="row">
+          <div class="node engine"><b>Decrypt helper (bundled, verbatim)</b><span>resolves the real value at test-run time via SOFTPLAY_SECRET_KEY</span></div>
+        </div>
+      </div>
+      <p class="muted" style="margin-top:14px;">
+        Scope note: this protects NON-PRODUCTION test credentials from appearing in plaintext in an LLM prompt or a
+        saved/committed source file — it is intentionally not a replacement for a bank's production-grade secrets
+        infrastructure (HSM-backed KMS, per-environment key rotation, centralized audit), which is exactly what the
+        environment-variable handoff above is designed to plug into for a real CI/CD pipeline.
+      </p>
+    </div>
+
+    <table class="ref">
+      <tr><th>Module</th><th>Responsibility</th></tr>
+      <tr><td>extension.ts</td><td>Activation entry point — builds <code>SettingsStore</code> + <code>ObjectSpyPanel</code>, registers commands and the sidebar view.</td></tr>
+      <tr><td>panel/objectSpyPanel.ts</td><td>Control Panel (sidebar). Orchestrates every other panel, builds every LLM prompt, owns the streaming/cancellation lifecycle.</td></tr>
+      <tr><td>panel/settingsPanel.ts</td><td>Settings webview — automation mode, browser, language/version, Copilot model picker, and this Architecture link.</td></tr>
+      <tr><td>panel/aiCodePanel.ts</td><td>Full-size "AI Generated Code" editor panel — Regenerate, Copy, Save, Verify &amp; Fix.</td></tr>
+      <tr><td>panel/generatedFeaturePanel.ts</td><td>Full-size "Generated Feature File" editor panel for AI-authored Gherkin output.</td></tr>
+      <tr><td>panel/featureFilePanel.ts</td><td>Browse/parse an existing <code>.feature</code> file and pick a Scenario/Scenario Outline to link.</td></tr>
+      <tr><td>browser/codegenManager.ts</td><td>Spawns and supervises Playwright's own <code>codegen</code> CLI as a detached child process; injects the real-Chrome/Edge launch override into recorded code.</td></tr>
+      <tr><td>execution/testExecutor.ts</td><td>Runs AI-generated code headless (pytest / Maven+JUnit) in a scratch project for "Verify &amp; Fix Code".</td></tr>
+      <tr><td>execution/environmentCheck.ts</td><td>Confirms Java/Maven or Python (+ required packages) are available; self-provisions an offline Python venv from bundled wheels. Cached (see Caching section).</td></tr>
+      <tr><td>llm/copilotClient.ts</td><td>The only module that touches <code>vscode.lm</code> — model discovery, prompt sending/streaming, token counting. Cached (see Caching section).</td></tr>
+      <tr><td>settings/settingsStore.ts</td><td>Typed, sanitized read/write wrapper around <code>context.globalState</code>; the single source of truth every panel reads from.</td></tr>
+      <tr><td>bdd/gherkinParser.ts, gherkinHighlight.ts, testNaming.ts</td><td>Parse <code>.feature</code> files, syntax-highlight Gherkin server-side, and derive Java class / Python module names from scenario titles.</td></tr>
+      <tr><td>api/apiRequestDetails.ts</td><td>Shapes and summarizes the API Automation request builder's data (method, URL, params, auth, headers, body) for the LLM prompt — every auth secret goes through Auto Password Encryption first.</td></tr>
+      <tr><td>cache/ttlCache.ts</td><td>Generic in-memory TTL + FIFO-eviction cache — the building block behind the environment-check and token-count caches.</td></tr>
+      <tr><td>cache/fileCache.ts</td><td>mtime-validated file-content caching for both bundled and workspace files.</td></tr>
+      <tr><td>security/secretVault.ts</td><td>Auto Password Encryption's cryptographic core — key management via <code>SecretStorage</code>, AES-256-CTR + HMAC-SHA256 encrypt/decrypt, the <code>ENC[v1:...]</code> token format.</td></tr>
+      <tr><td>security/uiPasswordRedactor.ts</td><td>UI Automation's half of Auto Password Encryption — finds password-shaped <code>.fill()</code>/<code>.type()</code> literals in recorded code and replaces them with encrypted tokens before any prompt is built.</td></tr>
+    </table>
+  </div>
+</section>
+
+<!-- ================= FUNCTION REFERENCE ================= -->
+<section id="functions" class="alt">
+  <div class="wrap">
+    <div class="section-head">
+      <h2>Function &amp; Method Reference</h2>
+      <p>Every exported function, class, and key internal method — grouped by file. Click a file to expand.</p>
+    </div>
+
+    <details class="filecard">
+      <summary><span class="path">extension.ts</span><span class="role">activation</span></summary>
+      <div class="fnlist">
+        <div class="fn"><span class="sig">activate(context)</span><span class="desc">Builds SettingsStore + ObjectSpyPanel, registers the sidebar view and 4 commands.</span></div>
+        <div class="fn"><span class="sig">deactivate()</span><span class="desc">No-op — cleanup runs via the disposable pushed in activate().</span></div>
+      </div>
+    </details>
+
+    <details class="filecard">
+      <summary><span class="path">panel/objectSpyPanel.ts</span><span class="role">Control Panel orchestrator</span></summary>
+      <div class="fnlist">
+        <div class="fn"><span class="sig">show()</span><span class="desc">Focuses the sidebar view.</span></div>
+        <div class="fn"><span class="sig">resolveWebviewView()</span><span class="desc">Wires the webview, restores current state on (re)open.</span></div>
+        <div class="fn"><span class="sig">startBrowser() / stopBrowser()</span><span class="desc">Delegates to CodegenManager.</span></div>
+        <div class="fn"><span class="sig">handleMessage()</span><span class="desc">Central switch for every inbound webview message.</span></div>
+        <div class="fn"><span class="sig">clearApiData() / clearSharedLlmContext()</span><span class="desc">"Clear Data" — wipes API form + all accumulated LLM context.</span></div>
+        <div class="fn"><span class="sig">updateTokenEstimate()</span><span class="desc">Builds the same prompt a real send would, purely to measure it (debounced client-side).</span></div>
+        <div class="fn"><span class="sig">recordReceivedTokens()</span><span class="desc">Counts a just-finished response and rebroadcasts the token bar.</span></div>
+        <div class="fn"><span class="sig">saveCode() / killAllBrowsers() / refreshPromptFiles()</span><span class="desc">Save dialog; stop+cleanup codegen; re-list <code>.github/*.md</code> instruction files.</span></div>
+        <div class="fn"><span class="sig">regenerateAiCode() / regenerateFeatureFile()</span><span class="desc">Replays the last request with current (possibly edited) code.</span></div>
+        <div class="fn"><span class="sig">generateFeatureFile()</span><span class="desc">Sends recorded code/API request to the LLM to author a new Gherkin feature file.</span></div>
+        <div class="fn"><span class="sig">verifyAndFixCode()</span><span class="desc">Runs checkEnvironment() → executes the code → on failure, asks the LLM to fix and retries (bounded attempts).</span></div>
+        <div class="fn"><span class="sig">runLlmRefinement()</span><span class="desc">The shared streaming-request engine behind every LLM call in this file.</span></div>
+        <div class="fn"><span class="sig">readInstructionFiles()</span><span class="desc">Reads checked custom .md files (workspace-file-cached).</span></div>
+        <div class="fn"><span class="sig">buildLlmPrompt() / buildApiLlmPrompt() / buildFeatureFilePrompt() / buildApiFeatureFilePrompt() / buildFixPrompt()</span><span class="desc">The five prompt assemblers — one per request shape.</span></div>
+        <div class="fn"><span class="sig">readSeniorQeInstructions() / readFeatureFileGenInstructions() / readApiAutomationInstructions()</span><span class="desc">File-cached bundled prompt standards.</span></div>
+        <div class="fn"><span class="sig">post*() family</span><span class="desc">One-way state broadcasts to the webview (status, code, tokens, linked scenario, etc).</span></div>
+      </div>
+    </details>
+
+    <details class="filecard">
+      <summary><span class="path">panel/settingsPanel.ts</span><span class="role">Settings webview</span></summary>
+      <div class="fnlist">
+        <div class="fn"><span class="sig">show()</span><span class="desc">Opens or reveals the Settings panel.</span></div>
+        <div class="fn"><span class="sig">handleMessage()</span><span class="desc">Applies a setting update, lists Copilot models, or opens this Architecture page.</span></div>
+        <div class="fn"><span class="sig">postSettings()</span><span class="desc">Pushes current settings + language-version options to the webview.</span></div>
+        <div class="fn"><span class="sig">getHtml()</span><span class="desc">Renders the panel's markup, styles, and client script.</span></div>
+      </div>
+    </details>
+
+    <details class="filecard">
+      <summary><span class="path">panel/aiCodePanel.ts, generatedFeaturePanel.ts, featureFilePanel.ts</span><span class="role">Editor-area panels</span></summary>
+      <div class="fnlist">
+        <div class="fn"><span class="sig">show() / isOpen() / hasCode()</span><span class="desc">Lifecycle + state queries for each panel.</span></div>
+        <div class="fn"><span class="sig">startGenerating() / appendChunk() / finish() / showError()</span><span class="desc">The streaming-render contract every LLM-backed panel implements.</span></div>
+        <div class="fn"><span class="sig">requestCurrentCode()</span><span class="desc">Asks the webview for its live (possibly hand-edited) content.</span></div>
+        <div class="fn"><span class="sig">setVerifyStatus() / setVerifyButtonEnabled()</span><span class="desc">AiCodePanel-only — reflects Verify &amp; Fix progress.</span></div>
+        <div class="fn"><span class="sig">browseAndOpen() / reopenLastFile() / render()</span><span class="desc">FeatureFilePanel-only — the .feature browse/parse/scenario-pick flow.</span></div>
+      </div>
+    </details>
+
+    <details class="filecard">
+      <summary><span class="path">browser/codegenManager.ts</span><span class="role">Playwright Codegen supervisor</span></summary>
+      <div class="fnlist">
+        <div class="fn"><span class="sig">start()</span><span class="desc">Resolves the CLI path, detects screen size, spawns <code>codegen</code> detached.</span></div>
+        <div class="fn"><span class="sig">stop()</span><span class="desc">Kills the child process and deletes its temp output file.</span></div>
+        <div class="fn"><span class="sig">pollOutputFile()</span><span class="desc">700ms poll loop diffing the output file's content.</span></div>
+        <div class="fn"><span class="sig">injectBrowserChannelConfig() / injectPythonExecutablePath() / injectJavaExecutablePath()</span><span class="desc">Rewrites generated code to launch the real installed Chrome/Edge, never a downloaded Chromium.</span></div>
+        <div class="fn"><span class="sig">detectPrimaryScreenSize()</span><span class="desc">PowerShell probe for the real monitor resolution (Windows only, safe fallback elsewhere).</span></div>
+      </div>
+    </details>
+
+    <details class="filecard">
+      <summary><span class="path">execution/testExecutor.ts &amp; environmentCheck.ts</span><span class="role">Local execution &amp; environment probing</span></summary>
+      <div class="fnlist">
+        <div class="fn"><span class="sig">executeGeneratedCode()</span><span class="desc">Dispatches to executeJava() or executePython() based on language.</span></div>
+        <div class="fn"><span class="sig">executeJava() / executePython()</span><span class="desc">Builds a scratch Maven/pytest project and runs it headless via execFile.</span></div>
+        <div class="fn"><span class="sig">checkEnvironment() → checkJavaEnvironment() / checkPythonEnvironment()</span><span class="desc">Cached toolchain probes (see Caching section).</span></div>
+        <div class="fn"><span class="sig">ensureOfflinePythonEnv()</span><span class="desc">Provisions a dedicated venv from bundled wheels — no PyPI network access needed.</span></div>
+      </div>
+    </details>
+
+    <details class="filecard">
+      <summary><span class="path">llm/copilotClient.ts</span><span class="role">GitHub Copilot bridge</span></summary>
+      <div class="fnlist">
+        <div class="fn"><span class="sig">listCopilotModels()</span><span class="desc">Lists every chat model Copilot currently exposes.</span></div>
+        <div class="fn"><span class="sig">findModel()</span><span class="desc">Resolves a model id to a live handle (falls back to the first available).</span></div>
+        <div class="fn"><span class="sig">sendPrompt()</span><span class="desc">Streams a single user-message request to the model.</span></div>
+        <div class="fn"><span class="sig">extractCodeBlock()</span><span class="desc">Pulls the first fenced code block out of a chat response.</span></div>
+        <div class="fn"><span class="sig">countModelTokens()</span><span class="desc">Cached real-tokenizer count + the model's context-window ceiling.</span></div>
+      </div>
+    </details>
+
+    <details class="filecard">
+      <summary><span class="path">cache/ttlCache.ts &amp; fileCache.ts</span><span class="role">Local caching layer</span></summary>
+      <div class="fnlist">
+        <div class="fn"><span class="sig">TtlCache.get() / set() / delete() / clear()</span><span class="desc">TTL expiry (lazy, on read) + FIFO eviction once a size cap is hit.</span></div>
+        <div class="fn"><span class="sig">readFileCachedSync()</span><span class="desc">fs-backed read for bundled files, validated by mtime.</span></div>
+        <div class="fn"><span class="sig">readWorkspaceFileCached()</span><span class="desc">vscode.workspace.fs-backed read for user workspace files, validated by mtime.</span></div>
+      </div>
+    </details>
+
+    <details class="filecard">
+      <summary><span class="path">security/secretVault.ts &amp; uiPasswordRedactor.ts</span><span class="role">Auto Password Encryption</span></summary>
+      <div class="fnlist">
+        <div class="fn"><span class="sig">encryptSecret() / decryptSecret()</span><span class="desc">AES-256-CTR + HMAC-SHA256 encrypt/decrypt against the ENC[v1:...] token format.</span></div>
+        <div class="fn"><span class="sig">getOrCreateMasterKey()</span><span class="desc">Lazily generates (once) and reads the per-install 32-byte key from VS Code's SecretStorage.</span></div>
+        <div class="fn"><span class="sig">getSecretEnv()</span><span class="desc">Base64 key packaged as SOFTPLAY_SECRET_KEY, injected into the child process running "Verify &amp; Fix Code".</span></div>
+        <div class="fn"><span class="sig">looksLikeSecretField()</span><span class="desc">Heuristic match (password/pwd/secret/token/pin/api-key/...) used to find credential-shaped fields.</span></div>
+        <div class="fn"><span class="sig">encryptPasswordLiteralsInCode()</span><span class="desc">Scans recorded UI code line-by-line and replaces a password-shaped .fill()/.type() literal with a decrypt() call over an encrypted token.</span></div>
+      </div>
+    </details>
+
+    <details class="filecard">
+      <summary><span class="path">settings/settingsStore.ts, bdd/*, api/apiRequestDetails.ts</span><span class="role">Data &amp; parsing utilities</span></summary>
+      <div class="fnlist">
+        <div class="fn"><span class="sig">SettingsStore.get() / update()</span><span class="desc">Typed read/write over context.globalState, with sanitize() guarding every write.</span></div>
+        <div class="fn"><span class="sig">parseFeatureFile() / buildFilteredScenarioText()</span><span class="desc">Parses Gherkin into a structured feature/scenario tree; rebuilds a scenario's text from selected steps only.</span></div>
+        <div class="fn"><span class="sig">highlightGherkin()</span><span class="desc">Server-side Gherkin → syntax-highlighted HTML.</span></div>
+        <div class="fn"><span class="sig">deriveJavaClassName() / derivePythonModuleName()</span><span class="desc">Turns a scenario title into a valid class/module name.</span></div>
+        <div class="fn"><span class="sig">buildApiRequestSummary() / hasApiRequest()</span><span class="desc">Renders the API builder's state into prompt-ready text; checks whether a request is non-empty.</span></div>
+      </div>
+    </details>
+  </div>
+</section>
+
+<!-- ================================================================= -->
+<!-- ========================  USER GUIDE  ========================== -->
+<!-- ================================================================= -->
+
+<section class="guide">
+  <div class="wrap" style="text-align:center;">
+    <span class="eyebrow">Now in plain English</span>
+    <h2 style="font-size:32px;margin:6px 0 10px;">Using softPlay — no experience needed</h2>
+    <p class="subhead" style="margin:0 auto;">Follow the pictures below in order. That's really it.</p>
+  </div>
+</section>
+
+<!-- ================= UI AUTOMATION GUIDE ================= -->
+<section id="ui-guide" class="alt">
+  <div class="wrap">
+    <div class="mode-title">
+      <span class="emoji">🖱️</span>
+      <h2>UI Automation Mode — turn clicking into code</h2>
+    </div>
+    <div class="steps">
+      <div class="step-card">
+        <span class="step-num">1</span>
+        <div class="emoji">🧩</div>
+        <h4>Open softPlay</h4>
+        <p>Click the softPlay icon in the Activity Bar on the left edge of VS Code.</p>
+      </div>
+      <div class="step-card">
+        <span class="step-num">2</span>
+        <div class="emoji">⚙️</div>
+        <h4>Check Settings</h4>
+        <p>Click the gear icon. Make sure <b>UI Automation</b> is selected, and pick Chrome or Edge.</p>
+      </div>
+      <div class="step-card">
+        <span class="step-num">3</span>
+        <div class="emoji">🌐</div>
+        <h4>Type a website</h4>
+        <p>Type a web address into the box next to Start, like <code>example.com</code>.</p>
+      </div>
+      <div class="step-card">
+        <span class="step-num">4</span>
+        <div class="emoji">▶️</div>
+        <h4>Click Start</h4>
+        <p>A real browser window opens. softPlay is now watching everything you do.</p>
+      </div>
+      <div class="step-card">
+        <span class="step-num">5</span>
+        <div class="emoji">🖱️</div>
+        <h4>Click around normally</h4>
+        <p>Type, click buttons, fill forms — just use the website like you normally would.</p>
+      </div>
+      <div class="step-card">
+        <span class="step-num">6</span>
+        <div class="emoji">⏹️</div>
+        <h4>Click Stop</h4>
+        <p>Stop the recording once you've done everything you wanted to test.</p>
+      </div>
+      <div class="step-card">
+        <span class="step-num">7</span>
+        <div class="emoji">📝</div>
+        <h4>See your code appear</h4>
+        <p>The raw recorded code shows up automatically on the right — this is the "before AI" version.</p>
+      </div>
+      <div class="step-card">
+        <span class="step-num">8</span>
+        <div class="emoji">💬</div>
+        <h4>(Optional) Add notes</h4>
+        <p>Type anything special you want in the chat box — e.g. "add a wait after login".</p>
+      </div>
+      <div class="step-card">
+        <span class="step-num">9</span>
+        <div class="emoji">🤖</div>
+        <h4>Click "Start AI Code Generation"</h4>
+        <p>The AI rewrites your recording into clean, professional test code with proper error handling.</p>
+      </div>
+      <div class="step-card">
+        <span class="step-num">10</span>
+        <div class="emoji">✅</div>
+        <h4>Click "Verify &amp; Fix Code"</h4>
+        <p>softPlay actually runs the code for you. If it fails, the AI automatically tries to fix it.</p>
+      </div>
+      <div class="step-card">
+        <span class="step-num">11</span>
+        <div class="emoji">💾</div>
+        <h4>Click "Save Code"</h4>
+        <p>Pick a location and save your finished, working test file. Done!</p>
+      </div>
+    </div>
+    <div class="callout" style="margin-top:28px;">
+      <span class="emoji">💡</span>
+      <span>Want a Cucumber-style plain-English test description too? Click <b>"Start AI Feature File Generation"</b> any time after Step 7 — it writes a <code>.feature</code> file from the same recording.</span>
+    </div>
+  </div>
+</section>
+
+<!-- ================= API AUTOMATION GUIDE ================= -->
+<section id="api-guide">
+  <div class="wrap">
+    <div class="mode-title">
+      <span class="emoji">🔌</span>
+      <h2>API Automation Mode — describe a request, get a test</h2>
+    </div>
+    <div class="steps">
+      <div class="step-card">
+        <span class="step-num">1</span>
+        <div class="emoji">⚙️</div>
+        <h4>Open Settings</h4>
+        <p>Click the gear icon and switch <b>Automation Type</b> to "API Automation". No browser needed for this mode.</p>
+      </div>
+      <div class="step-card">
+        <span class="step-num">2</span>
+        <div class="emoji">🔀</div>
+        <h4>Pick a method</h4>
+        <p>Choose GET, POST, PUT, DELETE, etc. from the dropdown, just like in Postman.</p>
+      </div>
+      <div class="step-card">
+        <span class="step-num">3</span>
+        <div class="emoji">🌐</div>
+        <h4>Type the API URL</h4>
+        <p>Paste in the web address of the API you want to test.</p>
+      </div>
+      <div class="step-card">
+        <span class="step-num">4</span>
+        <div class="emoji">⌨️</div>
+        <h4>(Shortcut) Paste a curl command</h4>
+        <p>Already have a curl command? Click <b>CURL</b>, paste it, and every field fills in for you automatically.</p>
+      </div>
+      <div class="step-card">
+        <span class="step-num">5</span>
+        <div class="emoji">🗂️</div>
+        <h4>Fill in the tabs</h4>
+        <p>Use Params, Authorization, Headers, and Body tabs exactly like you would in a normal API testing tool.</p>
+      </div>
+      <div class="step-card">
+        <span class="step-num">6</span>
+        <div class="emoji">💬</div>
+        <h4>(Optional) Add notes</h4>
+        <p>Tell the AI anything special in the chat box, like "check the response code is 201".</p>
+      </div>
+      <div class="step-card">
+        <span class="step-num">7</span>
+        <div class="emoji">🤖</div>
+        <h4>Click "Start AI Code Generation"</h4>
+        <p>softPlay writes a full REST Assured (Java) or requests (Python) test based on your request.</p>
+      </div>
+      <div class="step-card">
+        <span class="step-num">8</span>
+        <div class="emoji">✅</div>
+        <h4>Click "Verify &amp; Fix Code"</h4>
+        <p>The code is compiled/run for real; the AI auto-fixes anything that's broken.</p>
+      </div>
+      <div class="step-card">
+        <span class="step-num">9</span>
+        <div class="emoji">💾</div>
+        <h4>Click "Save Code"</h4>
+        <p>Save your finished API test file. Done!</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= GLOSSARY / BUTTONS ================= -->
+<section id="glossary" class="alt">
+  <div class="wrap">
+    <div class="section-head">
+      <h2>Every Button, Explained Simply</h2>
+      <p>If you're ever unsure what something does, find it here.</p>
+    </div>
+
+    <h2 class="inline-h">🖱️ Control Panel — always visible</h2>
+    <div class="glossary">
+      <div class="gl-item"><span class="emoji">⚙️</span><div><b>Settings (gear icon)</b><span>Opens the Settings menu — mode, browser, language, AI model.</span></div></div>
+      <div class="gl-item"><span class="emoji">🔗</span><div><b>Link Feature File</b><span>Connects a real Cucumber test scenario so the AI writes matching step code.</span></div></div>
+      <div class="gl-item"><span class="emoji">🗑️</span><div><b>Clear Data</b><span>Wipes everything on screen and starts fresh.</span></div></div>
+      <div class="gl-item"><span class="emoji">▶️</span><div><b>Start</b><span>Opens a real browser and starts recording your clicks (UI mode only).</span></div></div>
+      <div class="gl-item"><span class="emoji">⏹️</span><div><b>Stop</b><span>Stops recording, keeps the browser open.</span></div></div>
+      <div class="gl-item"><span class="emoji">❌</span><div><b>Kill All Browsers</b><span>Force-closes the recording browser and clears the recorded code.</span></div></div>
+      <div class="gl-item"><span class="emoji">➤</span><div><b>Chat send arrow</b><span>Adds your typed note to the request — it's sent next time you click a "Start AI…" button.</span></div></div>
+      <div class="gl-item"><span class="emoji">🤖</span><div><b>Start AI Code Generation</b><span>Sends everything to the AI to produce clean, final test code.</span></div></div>
+      <div class="gl-item"><span class="emoji">📄</span><div><b>Start AI Feature File Generation</b><span>Turns your recording into a plain-English Cucumber feature file.</span></div></div>
+      <div class="gl-item"><span class="emoji">📊</span><div><b>Token Monitoring bar</b><span>Shows how much of the AI's "reading limit" your request is using.</span></div></div>
+    </div>
+
+    <h2 class="inline-h">📝 AI Generated Code panel</h2>
+    <div class="glossary">
+      <div class="gl-item"><span class="emoji">🔁</span><div><b>Regenerate AI Code</b><span>Sends your (possibly hand-edited) code back to the AI for another pass.</span></div></div>
+      <div class="gl-item"><span class="emoji">📋</span><div><b>Copy Code</b><span>Copies the code to your clipboard.</span></div></div>
+      <div class="gl-item"><span class="emoji">💾</span><div><b>Save Code</b><span>Saves the code to a file on your computer.</span></div></div>
+      <div class="gl-item"><span class="emoji">✅</span><div><b>Verify &amp; Fix Code</b><span>Actually runs the code. If it breaks, asks the AI to repair it — you approve every attempt.</span></div></div>
+    </div>
+
+    <h2 class="inline-h">🔌 API Automation panel</h2>
+    <div class="glossary">
+      <div class="gl-item"><span class="emoji">🔀</span><div><b>Method dropdown</b><span>GET, POST, PUT, DELETE, etc. — what kind of request to send.</span></div></div>
+      <div class="gl-item"><span class="emoji">🌐</span><div><b>URL field</b><span>The web address of the API endpoint.</span></div></div>
+      <div class="gl-item"><span class="emoji">⌨️</span><div><b>CURL button</b><span>Paste a curl command to auto-fill the whole request.</span></div></div>
+      <div class="gl-item"><span class="emoji">🗂️</span><div><b>Params / Authorization / Headers / Body tabs</b><span>Where you fill in the details of your request — same idea as Postman.</span></div></div>
+      <div class="gl-item"><span class="emoji">🔑</span><div><b>Authorization type dropdown</b><span>Choose how the API checks who you are — API Key, Bearer Token, Basic Auth, and more.</span></div></div>
+      <div class="gl-item"><span class="emoji">✨</span><div><b>Beautify</b><span>Auto-formats messy JSON/XML in the Body tab so it's easy to read.</span></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= FAQ ================= -->
+<section id="faq">
+  <div class="wrap">
+    <div class="section-head">
+      <h2>Quick Troubleshooting</h2>
+      <p>The handful of messages people actually run into.</p>
+    </div>
+    <div class="grid cols-2">
+      <div class="card tight">
+        <h3>"No Copilot chat models found"</h3>
+        <p>Install the GitHub Copilot Chat extension and make sure you're signed in to a GitHub account with Copilot access.</p>
+      </div>
+      <div class="card tight">
+        <h3>Environment check failed (Java/Python)</h3>
+        <p>Install the missing tool and make sure it's on your system PATH, then click Verify &amp; Fix again — the failure is only cached for 15 seconds.</p>
+      </div>
+      <div class="card tight">
+        <h3>Nothing happens when I click Start</h3>
+        <p>Check the "softPlay" Output channel (View → Output, then pick softPlay from the dropdown) for the exact error.</p>
+      </div>
+      <div class="card tight">
+        <h3>My generated code seems out of date</h3>
+        <p>Click "Regenerate AI Code" — it always resends your current, live code, not an old snapshot.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <p><span class="td">softPlay</span> — Architecture &amp; Technical Information. Generated locally; opens as a static, offline page with no external dependencies.</p>
+    <p class="muted">Close this browser tab to return to VS Code.</p>
+  </div>
+</footer>
+
+</body>
+</html>
