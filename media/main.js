@@ -541,8 +541,19 @@
   function parseCurlCommand(raw) {
     const normalized = raw.replace(/\\\r?\n\s*/g, ' ').replace(/\^\r?\n\s*/g, ' ').trim();
     let tokens = tokenizeShellCommand(normalized);
-    if (tokens[0] && tokens[0].toLowerCase() === 'curl') {
-      tokens = tokens.slice(1);
+    // Strip the leading "curl" invocation itself, whatever form it takes --
+    // a bare "curl", Windows' "curl.exe" (what PowerShell users must type
+    // to reach the real curl.exe rather than its own "curl" alias for
+    // Invoke-WebRequest), or a full/quoted path to either (e.g.
+    // "C:\Program Files\Git\bin\curl.exe" or "/usr/bin/curl"). Matched by
+    // basename so any of those forms is recognized. Left in place
+    // otherwise -- e.g. a command that's just the request with no leading
+    // "curl" at all still parses, it simply won't find anything to strip.
+    if (tokens[0]) {
+      const basename = tokens[0].replace(/^.*[\\/]/, '').toLowerCase();
+      if (basename === 'curl' || basename === 'curl.exe') {
+        tokens = tokens.slice(1);
+      }
     }
 
     let method = null;
@@ -951,9 +962,9 @@
   let lastTokenState = null;
 
   /** Whatever's currently in the chat composer (staged bubbles + anything
-   * still unsent), WITHOUT clearing it -- unlike
-   * collectAndClearStagedInstructions(), typing must never itself clear
-   * the composer, only actually sending does. */
+   * still unsent), WITHOUT clearing or committing it -- unlike
+   * collectInstructionsForGeneration(), typing must never itself stage the
+   * unsent draft as a bubble, only actually generating does. */
   function currentCustomInstructionsPreview() {
     const unsent = chatInput.value.trim();
     const parts = unsent ? [...stagedInstructions, unsent] : stagedInstructions;
@@ -1168,33 +1179,38 @@
     }
   });
 
-  // Bundles every staged chat bubble plus whatever's still sitting unsent
-  // in the input box (so the user doesn't have to remember to hit ➤ first)
-  // into one customInstructions string, then clears the stage so the next
-  // run starts fresh. Shared by both "Start AI Code Generation" and "Generate
-  // Gherkin Feature File" — the two only differ in which message type they
-  // post and which extension-host method picks it up from there.
-  function collectAndClearStagedInstructions() {
+  // Bundles every staged chat bubble plus whatever's still sitting unsent in
+  // the input box (committed as one more bubble, so the user doesn't have to
+  // remember to hit ➤ first) into one customInstructions string. Unlike the
+  // old behavior, this deliberately does NOT clear the chat -- instructions
+  // accumulate across multiple generations (so typing more and regenerating
+  // ADDS to what the LLM sees rather than replacing it) and only go away on
+  // "Clear Data"/"Kill All Browsers" (see resetAiAssistUi()), per the
+  // explicit ask that chat context survive until then. Shared by "Start AI
+  // Code Generation" and "Start AI Feature File Generation" — the two only
+  // differ in which message type they post and which extension-host method
+  // picks it up from there.
+  function collectInstructionsForGeneration() {
     const unsent = chatInput.value.trim();
-    const allInstructions = unsent ? [...stagedInstructions, unsent] : stagedInstructions;
-    const customInstructions = allInstructions.join('\n\n');
-
-    stagedInstructions = [];
-    chatMessages.innerHTML = '';
-    chatInput.value = '';
-    autoResizeChatInput();
-
-    return customInstructions;
+    if (unsent) {
+      appendChatBubble(unsent);
+      stagedInstructions.push(unsent);
+      chatInput.value = '';
+      autoResizeChatInput();
+    }
+    return stagedInstructions.join('\n\n');
   }
 
   // "Start AI Code Generation" — the ONLY trigger for AI code generation.
-  // Bundles staged chat instructions, the current Playwright Code, and
-  // checked .md files; the extension host adds Settings and the linked
+  // Bundles staged chat instructions (accumulated across however many
+  // rounds the user has typed since the last Clear Data/Kill All Browsers —
+  // see collectInstructionsForGeneration()), the current Playwright Code,
+  // and checked .md files; the extension host adds Settings and the linked
   // scenario/selected steps on its own. `apiDetails` is always included —
   // harmless in UI mode, where the extension host simply ignores it (see
   // sendToLlm()/runLlmRefinement() there, gated on settings.automationMode).
   startAiProcessingBtn.addEventListener('click', () => {
-    const customInstructions = collectAndClearStagedInstructions();
+    const customInstructions = collectInstructionsForGeneration();
     vscode.postMessage({
       type: 'sendToLlm',
       payload: {
@@ -1204,20 +1220,20 @@
         apiDetails: collectApiRequestDetails()
       }
     });
-    // The chat composer was just cleared above -- Token Monitoring's next
-    // reading should reflect that (no staged instructions left), and the
-    // extension host will separately push the real "received" count once
-    // the response completes (see recordReceivedTokens() server-side).
+    // Any unsent draft was just committed as a bubble above -- Token
+    // Monitoring's next reading should reflect that, and the extension host
+    // will separately push the real "received" count once the response
+    // completes (see recordReceivedTokens() server-side).
     scheduleTokenEstimate();
   });
 
   // "Start AI Feature File Generation" — for when no .feature file has been
   // linked yet: turns whatever Playwright Codegen recorded (UI mode) or the
-  // API request just described above (API mode) — plus staged chat
-  // instructions — into a brand-new BDD feature file instead of refined
-  // automation code. See generateFeatureFile() on the extension host.
+  // API request just described above (API mode) — plus the same accumulated
+  // chat instructions — into a brand-new BDD feature file instead of
+  // refined automation code. See generateFeatureFile() on the extension host.
   generateFeatureFileBtn.addEventListener('click', () => {
-    const customInstructions = collectAndClearStagedInstructions();
+    const customInstructions = collectInstructionsForGeneration();
     vscode.postMessage({
       type: 'generateFeatureFile',
       payload: { code: playwrightEditor.getValue(), customInstructions, apiDetails: collectApiRequestDetails() }

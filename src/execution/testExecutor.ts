@@ -82,10 +82,11 @@ export async function executeGeneratedCode(
   scratchDir: string,
   linkedFeatureFilePath: string | undefined,
   pythonCommand: string,
-  automationMode: AutomationMode
+  automationMode: AutomationMode,
+  resourcesRoot?: string
 ): Promise<ExecutionResult> {
   return language === 'java'
-    ? executeJava(code, scratchDir, automationMode)
+    ? executeJava(code, scratchDir, automationMode, resourcesRoot)
     : executePython(code, scratchDir, linkedFeatureFilePath, pythonCommand, automationMode);
 }
 
@@ -176,7 +177,34 @@ function javaPomXml(bdd: boolean, automationMode: AutomationMode): string {
 `;
 }
 
-async function executeJava(code: string, scratchDir: string, automationMode: AutomationMode): Promise<ExecutionResult> {
+/**
+ * "-Dmaven.repo.local=..." pointed at the extension's own bundled Maven
+ * repository (resources/java/m2repo — REST Assured, JUnit Jupiter, SLF4J,
+ * and Cucumber's own jars, pre-resolved and shipped inside the .vsix; see
+ * resources/java/README.md for how that folder is populated), so a bank/
+ * enterprise machine with no Maven Central egress can still run "Verify &
+ * Fix Code" for API Automation entirely offline. This is a local-repo
+ * LOCATION override, not `-o`/offline mode — Maven still reaches out to its
+ * normally configured repositories for anything not already cached there
+ * (e.g. Playwright Java's own jars in UI mode, never bundled here — out of
+ * scope, the user is expected to already have a real browser + Playwright
+ * available), so nothing about UI mode's existing behavior changes. Omitted
+ * entirely if the bundled repo isn't present (e.g. a dev checkout that
+ * hasn't run the resources prep step) — falls back to Maven's own default
+ * local repo exactly as before.
+ */
+function bundledMavenRepoArgs(resourcesRoot: string | undefined): string[] {
+  if (!resourcesRoot) return [];
+  const bundledRepo = path.join(resourcesRoot, 'resources', 'java', 'm2repo');
+  return fs.existsSync(bundledRepo) ? [`-Dmaven.repo.local=${bundledRepo}`] : [];
+}
+
+async function executeJava(
+  code: string,
+  scratchDir: string,
+  automationMode: AutomationMode,
+  resourcesRoot?: string
+): Promise<ExecutionResult> {
   const classMatch = code.match(/public\s+class\s+(\w+)/);
   if (!classMatch) {
     return {
@@ -207,7 +235,8 @@ async function executeJava(code: string, scratchDir: string, automationMode: Aut
   // ever drives another fix-loop iteration in API mode (see this module's
   // doc comment); UI mode still needs the real `mvn test` run below to
   // know whether the headless browser flow actually passed.
-  const compileResult = await run('mvn', ['-q', '-B', '-Dstyle.color=never', 'test-compile'], scratchDir, true);
+  const repoArgs = bundledMavenRepoArgs(resourcesRoot);
+  const compileResult = await run('mvn', ['-q', '-B', '-Dstyle.color=never', ...repoArgs, 'test-compile'], scratchDir, true);
   if (compileResult.code !== 0) {
     return { success: false, compileOnly: false, apiCallOutcome: 'not-run', output: tailOutput(compileResult.output) };
   }
@@ -217,7 +246,7 @@ async function executeJava(code: string, scratchDir: string, automationMode: Aut
     return { success: true, compileOnly: true, apiCallOutcome: 'not-run', output: tailOutput(compileResult.output) };
   }
 
-  const testResult = await run('mvn', ['-q', '-B', '-Dstyle.color=never', `-Dtest=${className}`, 'test'], scratchDir, true);
+  const testResult = await run('mvn', ['-q', '-B', '-Dstyle.color=never', ...repoArgs, `-Dtest=${className}`, 'test'], scratchDir, true);
   const combinedOutput = tailOutput(`${compileResult.output}\n${testResult.output}`);
   if (automationMode === 'api') {
     // Compiling cleanly already satisfies "success" here — the live API

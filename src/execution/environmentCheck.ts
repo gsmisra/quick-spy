@@ -1,4 +1,6 @@
 import { execFile } from 'child_process';
+import * as fs from 'fs';
+import * as path from 'path';
 import { AutomationMode, Language } from '../settings/settingsStore';
 
 export interface EnvironmentCheckResult {
@@ -24,9 +26,15 @@ export interface EnvironmentCheckResult {
  * no PATHEXT resolution, unless a shell does that resolution first); none
  * of the args `mvn` is ever called with here contain spaces, so shell mode
  * never hits the quoting problem above for it. */
-function run(command: string, args: string[], cwd?: string, shell = false): Promise<{ code: number | null; output: string }> {
+function run(
+  command: string,
+  args: string[],
+  cwd?: string,
+  shell = false,
+  timeoutMs = 30_000
+): Promise<{ code: number | null; output: string }> {
   return new Promise((resolve) => {
-    execFile(command, args, { cwd, windowsHide: true, timeout: 30_000, shell }, (error, stdout, stderr) => {
+    execFile(command, args, { cwd, windowsHide: true, timeout: timeoutMs, shell }, (error, stdout, stderr) => {
       const output = `${stdout || ''}${stderr || ''}`.trim();
       // execFile's `error` for a plain non-zero exit still carries a
       // `.code` (the process's own exit code) — only fall back to -1 for a
@@ -69,6 +77,90 @@ export async function checkJavaEnvironment(): Promise<EnvironmentCheckResult> {
   return { ok: true, message: `${javaVersionLine} · ${mvnVersionLine}` };
 }
 
+const API_PYTHON_PACKAGES = ['requests', 'pytest'];
+
+function venvPythonPath(venvDir: string): string {
+  return process.platform === 'win32' ? path.join(venvDir, 'Scripts', 'python.exe') : path.join(venvDir, 'bin', 'python');
+}
+
+/**
+ * API Automation mode's `requests`/`pytest` — unlike UI mode's Playwright
+ * (a real browser automation library the user is expected to already have
+ * installed, see this module's other doc comments), these two are small,
+ * pure-Python, and safe to ship and self-provision entirely offline —
+ * exactly what "Verify & Fix Code" needs in a bank/enterprise environment
+ * with no PyPI egress. Bundled as offline pip wheels under the extension's
+ * own `resources/python/wheels` (universal `py3-none-any` builds only, so
+ * they install on any OS/Python combination without compiling anything —
+ * see resources/python/README.md for how that folder is populated).
+ *
+ * Provisions (once, lazily — reused on every later call) a dedicated
+ * virtual environment under the extension's own global storage, NEVER the
+ * user's system/base Python, so this never mutates an environment outside
+ * the extension's own control. Returns that venv's own python executable
+ * as `pythonCommand` — every subsequent compile-check/pytest run in API
+ * mode uses it instead of the system interpreter.
+ */
+async function ensureOfflineApiPythonEnv(
+  basePythonCommand: string,
+  resourcesRoot: string,
+  storageDir: string
+): Promise<EnvironmentCheckResult & { pythonCommand?: string }> {
+  const venvDir = path.join(storageDir, 'api-python-env');
+  const venvPython = venvPythonPath(venvDir);
+  const wheelsDir = path.join(resourcesRoot, 'resources', 'python', 'wheels');
+
+  if (!fs.existsSync(venvPython)) {
+    const created = await run(basePythonCommand, ['-m', 'venv', venvDir], undefined, false, 60_000);
+    if (created.code !== 0 || !fs.existsSync(venvPython)) {
+      return {
+        ok: false,
+        message: `Could not create the offline Python environment for API Automation verification (${venvDir}):\n${created.output}`
+      };
+    }
+  }
+
+  const missing: string[] = [];
+  for (const moduleName of API_PYTHON_PACKAGES) {
+    const result = await run(venvPython, ['-c', `import ${moduleName}`]);
+    if (result.code !== 0) missing.push(moduleName);
+  }
+  if (missing.length > 0) {
+    if (!fs.existsSync(wheelsDir)) {
+      return {
+        ok: false,
+        message:
+          `The offline Python environment is missing ${missing.join(', ')}, and the extension's bundled ` +
+          `offline package cache was not found at "${wheelsDir}" — try reinstalling the extension.`
+      };
+    }
+    const install = await run(
+      venvPython,
+      ['-m', 'pip', 'install', '--no-index', '--find-links', wheelsDir, ...missing],
+      undefined,
+      false,
+      60_000
+    );
+    if (install.code !== 0) {
+      return {
+        ok: false,
+        message: `Failed to install bundled offline package(s) (${missing.join(', ')}) into the local API Automation Python environment:\n${tailForMessage(install.output)}`
+      };
+    }
+  }
+
+  return {
+    ok: true,
+    pythonCommand: venvPython,
+    message: 'Offline API Automation Python environment ready (requests + pytest, bundled with the extension — no internet required).'
+  };
+}
+
+function tailForMessage(output: string): string {
+  const MAX = 800;
+  return output.length > MAX ? `…${output.slice(-MAX)}` : output;
+}
+
 /**
  * Same idea for Python: verifies a `python` (or `python3`) interpreter is on
  * PATH, then that the pip packages the generated test file actually needs
@@ -76,12 +168,19 @@ export async function checkJavaEnvironment(): Promise<EnvironmentCheckResult> {
  * own browser binaries — those are never installed, see
  * codegenManager.ts), `pytest`, and `pytest-playwright` (supplies the
  * `page`/`browser_type_launch_args` fixtures the generated code overrides);
- * API mode: `requests` and `pytest` (no Playwright/browser involvement at
- * all in API automation). Reports exactly what's missing and the pip
- * command to install it; never installs anything itself.
+ * these are reported only, never installed, exactly as before.
+ *
+ * API mode: `requests` and `pytest`, self-provisioned entirely offline from
+ * the extension's own bundled wheels into a dedicated venv the extension
+ * fully owns — see `ensureOfflineApiPythonEnv()` — whenever `resourcesRoot`
+ * and `storageDir` are supplied (the extension's real callers always pass
+ * both; they're optional only so this function stays testable/callable
+ * without a live extension context).
  */
 export async function checkPythonEnvironment(
-  automationMode: AutomationMode = 'ui'
+  automationMode: AutomationMode = 'ui',
+  resourcesRoot?: string,
+  storageDir?: string
 ): Promise<EnvironmentCheckResult & { pythonCommand?: string }> {
   const candidates = ['python', 'python3'];
   let pythonCommand: string | undefined;
@@ -99,6 +198,10 @@ export async function checkPythonEnvironment(
       ok: false,
       message: 'Python was not found on PATH — neither "python --version" nor "python3 --version" succeeded. Install Python 3 and ensure it is on PATH before executing generated Python code.'
     };
+  }
+
+  if (automationMode === 'api' && resourcesRoot && storageDir) {
+    return ensureOfflineApiPythonEnv(pythonCommand, resourcesRoot, storageDir);
   }
 
   const required = automationMode === 'api' ? ['requests', 'pytest'] : ['playwright', 'pytest', 'pytest_playwright'];
@@ -124,6 +227,11 @@ export async function checkPythonEnvironment(
   return { ok: true, pythonCommand, message: versionLine };
 }
 
-export function checkEnvironment(language: Language, automationMode: AutomationMode = 'ui'): Promise<EnvironmentCheckResult> {
-  return language === 'java' ? checkJavaEnvironment() : checkPythonEnvironment(automationMode);
+export function checkEnvironment(
+  language: Language,
+  automationMode: AutomationMode = 'ui',
+  resourcesRoot?: string,
+  storageDir?: string
+): Promise<EnvironmentCheckResult & { pythonCommand?: string }> {
+  return language === 'java' ? checkJavaEnvironment() : checkPythonEnvironment(automationMode, resourcesRoot, storageDir);
 }

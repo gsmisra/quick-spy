@@ -8,7 +8,7 @@ import { FeatureFilePanel, LinkedScenario } from './featureFilePanel';
 import { AiCodePanel } from './aiCodePanel';
 import { GeneratedFeaturePanel } from './generatedFeaturePanel';
 import { CopilotUnavailableError, countModelTokens, extractCodeBlock, sendPrompt } from '../llm/copilotClient';
-import { checkEnvironment, checkPythonEnvironment } from '../execution/environmentCheck';
+import { checkEnvironment } from '../execution/environmentCheck';
 import { executeGeneratedCode } from '../execution/testExecutor';
 import { ApiRequestDetails, buildApiRequestSummary, hasApiRequest } from '../api/apiRequestDetails';
 
@@ -111,6 +111,18 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
   // the same request without the user re-entering it. Never read in UI
   // mode.
   private lastApiRequestDetails: ApiRequestDetails | undefined;
+  // The full accumulated chat-box instructions ("Add any details for the AI
+  // to follow…") from the LAST "Start AI Code Generation"/"Start AI Feature
+  // File Generation" — kept around for the exact same reason as
+  // lastApiRequestDetails just above: "Regenerate AI Code" (AI Generated
+  // Code panel) has no chat box of its own, so it replays this instead of
+  // silently dropping whatever instructions the user had accumulated. The
+  // sidebar itself already accumulates across multiple rounds rather than
+  // clearing after each send (see collectInstructionsForGeneration() in
+  // main.js) — this is simply the extension host's own copy of that same
+  // "current" string. Reset to '' only by clearSharedLlmContext() (Clear
+  // Data / Kill All Browsers), matching the chat box's own reset boundary.
+  private lastCustomInstructions = '';
   // Workspace-relative paths of whichever "Custom md files" (.github/*.md)
   // checkboxes are currently checked in the webview — kept in sync via the
   // 'selectedInstructionFiles' message every time the user (un)checks one.
@@ -381,7 +393,9 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
    * lives in the Playwright Code / API request fields themselves: the
    * linked scenario, the linked/cached feature file (forgotten outright,
    * not just unlinked — "Link Feature File" browses fresh again next
-   * time), checked "Custom md files", any in-flight LLM request, both
+   * time), checked "Custom md files", the accumulated chat-box instructions
+   * (lastCustomInstructions — the sidebar's own chat composer is reset the
+   * same way, in resetAiAssistUi() in main.js), any in-flight LLM request, both
    * result panels' content (AI Generated Code and Generated Feature File —
    * "generated code" per the explicit ask covers both), the green
    * correctness banner, and the Token Monitoring estimate. Callers add
@@ -403,6 +417,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
     this.postFeatureFileAvailable(false);
 
     this.lastApiRequestDetails = undefined;
+    this.lastCustomInstructions = '';
     this.selectedInstructionFiles = [];
 
     this.aiCodePanel.clear();
@@ -622,19 +637,24 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
     if (apiDetails) {
       this.lastApiRequestDetails = apiDetails;
     }
+    this.lastCustomInstructions = customInstructions.trim();
     const instructions = await this.readInstructionFiles(selectedFiles);
-    await this.runLlmRefinement(instructions, playwrightCode, customInstructions.trim(), apiDetails);
+    await this.runLlmRefinement(instructions, playwrightCode, this.lastCustomInstructions, apiDetails);
   }
 
   /** "Regenerate AI Code" (AI Generated Code panel) — re-runs the same
    * refinement with everything read fresh at click time: the Playwright
    * Code editor's live content (including manual edits — see
    * requestCurrentPlaywrightCode()), Settings (language/version/browser),
-   * the linked Gherkin scenario, and the checked Custom md files. An
-   * explicit, on-demand click, same as "Start AI Code Generation" — just from
-   * the AI Generated Code panel instead of the Control Panel, and without
-   * whatever's currently sitting in the chat box (that's specific to
-   * "Start AI Code Generation"). */
+   * the linked Gherkin scenario, the checked Custom md files, and whatever
+   * chat-box instructions have accumulated since the last "Start AI Code
+   * Generation"/"Start AI Feature File Generation" (`lastCustomInstructions`
+   * — the AI Generated Code panel has no chat box of its own, so this is
+   * how it stays in sync with the sidebar's, per the explicit ask that
+   * newly typed instructions carry into a regeneration, in both UI and API
+   * Automation mode). An explicit, on-demand click, same as "Start AI Code
+   * Generation" — just from the AI Generated Code panel instead of the
+   * Control Panel. */
   private async regenerateAiCode(): Promise<void> {
     const settings = this.settingsStore.get();
     if (!settings.copilotEnabled || !settings.copilotModelId) {
@@ -647,7 +667,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
     // send, the automatic pipeline) enforces it the same way.
     const playwrightCode = await this.requestCurrentPlaywrightCode();
     const instructions = await this.readInstructionFiles(this.selectedInstructionFiles);
-    await this.runLlmRefinement(instructions, playwrightCode, '', this.lastApiRequestDetails);
+    await this.runLlmRefinement(instructions, playwrightCode, this.lastCustomInstructions, this.lastApiRequestDetails);
   }
 
   /** "Start AI Feature File Generation" (Control Panel) — the counterpart to
@@ -667,6 +687,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
     if (apiDetails) {
       this.lastApiRequestDetails = apiDetails;
     }
+    this.lastCustomInstructions = customInstructions.trim();
     // Same empty/no-op guard as runLlmRefinement(), for whichever mode's
     // own notion of "there's nothing here yet" applies.
     if (isApiMode ? !hasApiRequest(apiDetails ?? this.lastApiRequestDetails) : !playwrightCode.trim()) {
@@ -761,7 +782,12 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
     this.postCodeCorrectness(false);
     try {
       this.aiCodePanel.setVerifyStatus('Checking the local environment…', 'info');
-      const env = await checkEnvironment(settings.language, settings.automationMode);
+      const env = await checkEnvironment(
+        settings.language,
+        settings.automationMode,
+        this.context.extensionUri.fsPath,
+        this.context.globalStorageUri.fsPath
+      );
       this.outputChannel.appendLine(
         `Verify & Fix Code — environment check (${settings.language}, ${isApiMode ? 'API' : 'UI'} mode): ${env.ok ? 'OK' : 'FAILED'} — ${env.message}`
       );
@@ -770,8 +796,10 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
         void vscode.window.showErrorMessage(`softPlay: ${env.message}`);
         return;
       }
-      const pythonCommand =
-        settings.language === 'python' ? (await checkPythonEnvironment(settings.automationMode)).pythonCommand ?? 'python' : '';
+      // `env` already ran the Python check above (env & package
+      // provisioning included, for API mode) — reuse its pythonCommand
+      // rather than checking a second time.
+      const pythonCommand = settings.language === 'python' ? env.pythonCommand ?? 'python' : '';
 
       // Kept fresh on every attempt (re-read, not snapshotted once) so a
       // recording made WHILE the fix loop is running still counts — but in
@@ -805,7 +833,8 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
           scratchDir,
           this.linkedScenario?.featureFilePath,
           pythonCommand,
-          settings.automationMode
+          settings.automationMode,
+          this.context.extensionUri.fsPath
         );
         this.outputChannel.appendLine(
           `Verify & Fix Code — attempt ${attempt}: ${result.success ? 'PASSED' : 'FAILED'}` +
