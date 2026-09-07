@@ -105,7 +105,30 @@ const SLF4J_VERSION = '2.0.13';
 const CUCUMBER_VERSION = '7.18.0';
 const JUNIT_PLATFORM_SUITE_VERSION = '1.11.0';
 
-function javaPomXml(bdd: boolean, automationMode: AutomationMode): string {
+/**
+ * Playwright Java's own "driver-bundle" dependency ships Node.js binaries
+ * for EVERY supported OS combined into one ~200MB jar (Playwright's Java
+ * bindings shell out to a bundled Node.js process — that's the actual
+ * driver; "driver-bundle" is just Node itself). Bundling that whole thing
+ * would dwarf everything else in resources/java/m2repo, so instead this
+ * extension excludes it and ships ONE plain, official Node.js Windows
+ * binary instead (resources/java/node-win-x64/node.exe, ~70MB, see
+ * resources/java/README.md) — Playwright Java reads `PLAYWRIGHT_NODEJS_PATH`
+ * to use exactly that instead of hunting for its own bundled one, which is
+ * both smaller and avoids needing driver-bundle in the repo at all. Windows-
+ * only for now (matches this extension's existing Windows-only scope, e.g.
+ * detectPrimaryScreenSize() in codegenManager.ts) — falls back to leaving
+ * Playwright's dependency untouched (its own driver-bundle download) on any
+ * other OS/if the bundled node.exe isn't found, e.g. a dev checkout that
+ * hasn't run the resources prep step.
+ */
+function bundledNodeExePath(resourcesRoot: string | undefined): string | undefined {
+  if (!resourcesRoot || process.platform !== 'win32') return undefined;
+  const nodeExe = path.join(resourcesRoot, 'resources', 'java', 'node-win-x64', 'node.exe');
+  return fs.existsSync(nodeExe) ? nodeExe : undefined;
+}
+
+function javaPomXml(bdd: boolean, automationMode: AutomationMode, resourcesRoot: string | undefined): string {
   const cucumberDeps = bdd
     ? `
     <dependency>
@@ -126,7 +149,9 @@ function javaPomXml(bdd: boolean, automationMode: AutomationMode): string {
     : '';
   // API mode's generated code uses REST Assured, never Playwright (no
   // browser is ever involved); UI mode is the reverse — declaring only
-  // what's actually needed keeps the scratch build lean.
+  // what's actually needed keeps the scratch build lean. See
+  // bundledNodeExePath()'s doc comment for why the exclusion is conditional.
+  const bundledNode = automationMode === 'ui' ? bundledNodeExePath(resourcesRoot) : undefined;
   const primaryDep =
     automationMode === 'api'
       ? `
@@ -139,8 +164,26 @@ function javaPomXml(bdd: boolean, automationMode: AutomationMode): string {
     <dependency>
       <groupId>com.microsoft.playwright</groupId>
       <artifactId>playwright</artifactId>
-      <version>${PLAYWRIGHT_JAVA_VERSION}</version>
+      <version>${PLAYWRIGHT_JAVA_VERSION}</version>${
+          bundledNode
+            ? `
+      <exclusions>
+        <exclusion>
+          <groupId>com.microsoft.playwright</groupId>
+          <artifactId>driver-bundle</artifactId>
+        </exclusion>
+      </exclusions>`
+            : ''
+        }
     </dependency>`;
+  const surefireConfig = bundledNode
+    ? `
+        <configuration>
+          <environmentVariables>
+            <PLAYWRIGHT_NODEJS_PATH>${bundledNode}</PLAYWRIGHT_NODEJS_PATH>
+          </environmentVariables>
+        </configuration>`
+    : '';
   return `<project xmlns="http://maven.apache.org/POM/4.0.0">
   <modelVersion>4.0.0</modelVersion>
   <groupId>com.softplay.runner</groupId>
@@ -169,7 +212,7 @@ function javaPomXml(bdd: boolean, automationMode: AutomationMode): string {
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-surefire-plugin</artifactId>
-        <version>3.2.5</version>
+        <version>3.2.5</version>${surefireConfig}
       </plugin>
     </plugins>
   </build>
@@ -179,17 +222,16 @@ function javaPomXml(bdd: boolean, automationMode: AutomationMode): string {
 
 /**
  * "-Dmaven.repo.local=..." pointed at the extension's own bundled Maven
- * repository (resources/java/m2repo — REST Assured, JUnit Jupiter, SLF4J,
- * and Cucumber's own jars, pre-resolved and shipped inside the .vsix; see
+ * repository (resources/java/m2repo — REST Assured, Playwright (minus its
+ * driver-bundle, see bundledNodeExePath()), JUnit Jupiter, SLF4J, and
+ * Cucumber's own jars, pre-resolved and shipped inside the .vsix; see
  * resources/java/README.md for how that folder is populated), so a bank/
  * enterprise machine with no Maven Central egress can still run "Verify &
- * Fix Code" for API Automation entirely offline. This is a local-repo
- * LOCATION override, not `-o`/offline mode — Maven still reaches out to its
- * normally configured repositories for anything not already cached there
- * (e.g. Playwright Java's own jars in UI mode, never bundled here — out of
- * scope, the user is expected to already have a real browser + Playwright
- * available), so nothing about UI mode's existing behavior changes. Omitted
- * entirely if the bundled repo isn't present (e.g. a dev checkout that
+ * Fix Code" for both UI and API Automation entirely offline. This is a
+ * local-repo LOCATION override, not `-o`/offline mode — Maven still reaches
+ * out to its normally configured repositories for anything not already
+ * cached there, so nothing breaks if some other dependency is ever needed.
+ * Omitted entirely if the bundled repo isn't present (e.g. a dev checkout that
  * hasn't run the resources prep step) — falls back to Maven's own default
  * local repo exactly as before.
  */
@@ -229,7 +271,7 @@ async function executeJava(
     }
   }
   await fs.promises.writeFile(path.join(srcDir, `${className}.java`), code, 'utf8');
-  await fs.promises.writeFile(path.join(scratchDir, 'pom.xml'), javaPomXml(bdd, automationMode), 'utf8');
+  await fs.promises.writeFile(path.join(scratchDir, 'pom.xml'), javaPomXml(bdd, automationMode, resourcesRoot), 'utf8');
 
   // Compile is always checked first and on its own — the ONLY signal that
   // ever drives another fix-loop iteration in API mode (see this module's

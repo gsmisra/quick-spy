@@ -77,36 +77,64 @@ export async function checkJavaEnvironment(): Promise<EnvironmentCheckResult> {
   return { ok: true, message: `${javaVersionLine} · ${mvnVersionLine}` };
 }
 
-const API_PYTHON_PACKAGES = ['requests', 'pytest'];
+// Import names vs. the pip package names required to install them —
+// differ only for pytest-playwright (`pytest_playwright` import).
+const OFFLINE_PYTHON_PACKAGES: Record<AutomationMode, { import: string; pipName: string }[]> = {
+  api: [
+    { import: 'requests', pipName: 'requests' },
+    { import: 'pytest', pipName: 'pytest' }
+  ],
+  ui: [
+    { import: 'playwright', pipName: 'playwright' },
+    { import: 'pytest', pipName: 'pytest' },
+    { import: 'pytest_playwright', pipName: 'pytest-playwright' }
+  ]
+};
 
 function venvPythonPath(venvDir: string): string {
   return process.platform === 'win32' ? path.join(venvDir, 'Scripts', 'python.exe') : path.join(venvDir, 'bin', 'python');
 }
 
+function tailForMessage(output: string): string {
+  const MAX = 800;
+  return output.length > MAX ? `…${output.slice(-MAX)}` : output;
+}
+
 /**
- * API Automation mode's `requests`/`pytest` — unlike UI mode's Playwright
- * (a real browser automation library the user is expected to already have
- * installed, see this module's other doc comments), these two are small,
- * pure-Python, and safe to ship and self-provision entirely offline —
- * exactly what "Verify & Fix Code" needs in a bank/enterprise environment
- * with no PyPI egress. Bundled as offline pip wheels under the extension's
- * own `resources/python/wheels` (universal `py3-none-any` builds only, so
- * they install on any OS/Python combination without compiling anything —
- * see resources/python/README.md for how that folder is populated).
+ * Self-provisions the pip packages "Verify & Fix Code" needs — API mode's
+ * `requests`/`pytest`, or UI mode's `playwright`/`pytest`/`pytest-playwright`
+ * — entirely offline, from the extension's own bundled wheels under
+ * `resources/python/wheels` (see resources/python/README.md for how that
+ * folder is populated), so a bank/enterprise machine with no PyPI egress
+ * never needs an internet-based `pip install` to run generated Python code.
  *
- * Provisions (once, lazily — reused on every later call) a dedicated
- * virtual environment under the extension's own global storage, NEVER the
- * user's system/base Python, so this never mutates an environment outside
- * the extension's own control. Returns that venv's own python executable
- * as `pythonCommand` — every subsequent compile-check/pytest run in API
- * mode uses it instead of the system interpreter.
+ * API mode's packages are pure-Python universal wheels, portable to any OS.
+ * UI mode's `playwright` (and its native `greenlet` dependency) are NOT —
+ * PyPI ships a real per-OS/per-Python-ABI binary for those (Playwright's
+ * Python package bundles its own self-contained driver, Node.js binary
+ * included, no external Node/browser-download step needed for the
+ * `executable_path=<real Chrome/Edge>` pattern this extension always uses —
+ * see codegenManager.ts) — so only Windows x64 builds are bundled here,
+ * matching this extension's existing Windows-only scope (e.g.
+ * detectPrimaryScreenSize()). UI mode falls back to the old check-only
+ * behavior (report what's missing, install nothing) on any other OS.
+ *
+ * Provisions (once, lazily — reused on every later call) a DEDICATED
+ * virtual environment per mode under the extension's own global storage,
+ * NEVER the user's system/base Python, so this never mutates an environment
+ * outside the extension's own control. Returns that venv's own python
+ * executable as `pythonCommand` — every subsequent compile-check/pytest run
+ * uses it instead of the system interpreter.
  */
-async function ensureOfflineApiPythonEnv(
+async function ensureOfflinePythonEnv(
   basePythonCommand: string,
   resourcesRoot: string,
-  storageDir: string
+  storageDir: string,
+  automationMode: AutomationMode
 ): Promise<EnvironmentCheckResult & { pythonCommand?: string }> {
-  const venvDir = path.join(storageDir, 'api-python-env');
+  const packages = OFFLINE_PYTHON_PACKAGES[automationMode];
+  const modeLabel = automationMode === 'api' ? 'API' : 'UI';
+  const venvDir = path.join(storageDir, `${automationMode}-python-env`);
   const venvPython = venvPythonPath(venvDir);
   const wheelsDir = path.join(resourcesRoot, 'resources', 'python', 'wheels');
 
@@ -115,15 +143,15 @@ async function ensureOfflineApiPythonEnv(
     if (created.code !== 0 || !fs.existsSync(venvPython)) {
       return {
         ok: false,
-        message: `Could not create the offline Python environment for API Automation verification (${venvDir}):\n${created.output}`
+        message: `Could not create the offline Python environment for ${modeLabel} Automation verification (${venvDir}):\n${created.output}`
       };
     }
   }
 
   const missing: string[] = [];
-  for (const moduleName of API_PYTHON_PACKAGES) {
-    const result = await run(venvPython, ['-c', `import ${moduleName}`]);
-    if (result.code !== 0) missing.push(moduleName);
+  for (const pkg of packages) {
+    const result = await run(venvPython, ['-c', `import ${pkg.import}`]);
+    if (result.code !== 0) missing.push(pkg.pipName);
   }
   if (missing.length > 0) {
     if (!fs.existsSync(wheelsDir)) {
@@ -139,12 +167,12 @@ async function ensureOfflineApiPythonEnv(
       ['-m', 'pip', 'install', '--no-index', '--find-links', wheelsDir, ...missing],
       undefined,
       false,
-      60_000
+      120_000
     );
     if (install.code !== 0) {
       return {
         ok: false,
-        message: `Failed to install bundled offline package(s) (${missing.join(', ')}) into the local API Automation Python environment:\n${tailForMessage(install.output)}`
+        message: `Failed to install bundled offline package(s) (${missing.join(', ')}) into the local ${modeLabel} Automation Python environment:\n${tailForMessage(install.output)}`
       };
     }
   }
@@ -152,30 +180,20 @@ async function ensureOfflineApiPythonEnv(
   return {
     ok: true,
     pythonCommand: venvPython,
-    message: 'Offline API Automation Python environment ready (requests + pytest, bundled with the extension — no internet required).'
+    message: `Offline ${modeLabel} Automation Python environment ready (${packages.map((p) => p.pipName).join(' + ')}, bundled with the extension — no internet required).`
   };
-}
-
-function tailForMessage(output: string): string {
-  const MAX = 800;
-  return output.length > MAX ? `…${output.slice(-MAX)}` : output;
 }
 
 /**
  * Same idea for Python: verifies a `python` (or `python3`) interpreter is on
- * PATH, then that the pip packages the generated test file actually needs
- * are importable — UI mode: `playwright` (the library import, never its
- * own browser binaries — those are never installed, see
- * codegenManager.ts), `pytest`, and `pytest-playwright` (supplies the
- * `page`/`browser_type_launch_args` fixtures the generated code overrides);
- * these are reported only, never installed, exactly as before.
- *
- * API mode: `requests` and `pytest`, self-provisioned entirely offline from
- * the extension's own bundled wheels into a dedicated venv the extension
- * fully owns — see `ensureOfflineApiPythonEnv()` — whenever `resourcesRoot`
+ * PATH, then self-provisions the pip packages the generated test file
+ * actually needs — see `ensureOfflinePythonEnv()` — whenever `resourcesRoot`
  * and `storageDir` are supplied (the extension's real callers always pass
  * both; they're optional only so this function stays testable/callable
- * without a live extension context).
+ * without a live extension context) and, for UI mode, the current OS is one
+ * the bundled wheels actually support (Windows). Otherwise falls back to
+ * the old check-only behavior: report exactly what pip package is missing
+ * and the command to install it, installing nothing itself.
  */
 export async function checkPythonEnvironment(
   automationMode: AutomationMode = 'ui',
@@ -200,11 +218,12 @@ export async function checkPythonEnvironment(
     };
   }
 
-  if (automationMode === 'api' && resourcesRoot && storageDir) {
-    return ensureOfflineApiPythonEnv(pythonCommand, resourcesRoot, storageDir);
+  const canGoOffline = resourcesRoot && storageDir && (automationMode === 'api' || process.platform === 'win32');
+  if (canGoOffline) {
+    return ensureOfflinePythonEnv(pythonCommand, resourcesRoot, storageDir, automationMode);
   }
 
-  const required = automationMode === 'api' ? ['requests', 'pytest'] : ['playwright', 'pytest', 'pytest_playwright'];
+  const required = OFFLINE_PYTHON_PACKAGES[automationMode].map((p) => p.import);
   const missing: string[] = [];
   for (const moduleName of required) {
     const result = await run(pythonCommand, ['-c', `import ${moduleName}`]);
