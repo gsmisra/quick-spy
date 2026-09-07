@@ -1,0 +1,11 @@
+# Vendored, pre-resolved offline dependency caches (resources/java/README.md
+# and resources/python/README.md explain what these are and how they're
+# regenerated) — treated as opaque binary blobs, never subject to line-
+# ending conversion. Several of these (.pom files especially) carry a paired
+# .sha1 checksum computed against their original download bytes; letting
+# core.autocrlf normalize them on checkout would silently change those
+# bytes on a machine with autocrlf enabled, for no benefit (Maven doesn't
+# actually need CRLF line endings, or care about them either way).
+resources/java/m2repo/** -text
+resources/python/wheels/** -text
+resources/java/node-win-x64/** -text
