@@ -2,7 +2,7 @@
   "name": "object-spy-playwright",
   "displayName": "SoftPlay",
   "description": "Drive Playwright's own real codegen tool from a VS Code sidebar, link a Cucumber Gherkin scenario to what it records, and get an AI-refined, enterprise-grade Java or Python test — with proper waits, logging, and BDD step definitions — via GitHub Copilot.",
-  "version": "0.1.62",
+  "version": "0.1.66",
   "publisher": "local-dev",
   "private": true,
   "icon": "media/icon.png",
@@ -79,6 +79,7 @@
     "package": "node node_modules/@vscode/vsce/vsce package"
   },
   "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "^20.14.0",
     "@types/vscode": "^1.90.0",
     "@vscode/vsce": "^2.32.0",
@@ -86,6 +87,7 @@
   },
   "dependencies": {
     "@langchain/core": "^1.2.9",
+    "js-yaml": "^4.3.2",
     "playwright": "^1.47.0",
     "zod": "^3.25.76"
   }

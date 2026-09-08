@@ -41,24 +41,67 @@
   /* ---------- Layout shells ---------- */
   .wrap { max-width: 1100px; margin: 0 auto; padding: 0 28px; }
 
-  nav.topbar {
-    position: sticky; top: 0; z-index: 50;
-    background: rgba(255, 255, 255, 0.78);
-    backdrop-filter: saturate(180%) blur(18px);
-    -webkit-backdrop-filter: saturate(180%) blur(18px);
+  /* ---------- Hamburger + slide-out nav drawer ----------
+     Every section link lives in a hidden-by-default drawer rather than an
+     always-visible topbar, opened via the floating hamburger button —
+     keeps the page's own content the first thing a reader sees, with
+     full navigation one click away. */
+  .hamburger-btn {
+    position: fixed; top: 18px; left: 20px; z-index: 210;
+    width: 46px; height: 46px; border: none; border-radius: 14px;
+    background: rgba(255, 255, 255, 0.85);
+    backdrop-filter: saturate(180%) blur(14px);
+    -webkit-backdrop-filter: saturate(180%) blur(14px);
+    box-shadow: 4px 4px 12px var(--shadow-dark), -3px -3px 10px var(--shadow-light);
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px;
+    cursor: pointer; padding: 0;
+  }
+  .hamburger-btn .bar {
+    width: 20px; height: 2px; border-radius: 2px; background: var(--ink);
+    transition: transform 0.28s cubic-bezier(.5,0,.2,1), opacity 0.2s ease;
+  }
+  /* Morphs into an "X" while the drawer is open — the bars rotate/fade
+     rather than the icon just disappearing, so the button itself explains
+     what clicking it again will do. */
+  body.nav-open .hamburger-btn .bar:nth-child(1) { transform: translateY(7px) rotate(45deg); }
+  body.nav-open .hamburger-btn .bar:nth-child(2) { opacity: 0; transform: scaleX(0); }
+  body.nav-open .hamburger-btn .bar:nth-child(3) { transform: translateY(-7px) rotate(-45deg); }
+
+  .nav-overlay {
+    position: fixed; inset: 0; z-index: 195;
+    background: rgba(20, 20, 22, 0.32);
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.3s ease;
+  }
+  body.nav-open .nav-overlay { opacity: 1; pointer-events: auto; }
+
+  .nav-drawer {
+    position: fixed; top: 0; bottom: 0; left: 0; z-index: 200;
+    width: 300px; max-width: 84vw;
+    background: #ffffff;
+    box-shadow: 10px 0 32px rgba(0, 0, 0, 0.16);
+    padding: 26px 0 24px;
+    overflow-y: auto;
+    transform: translateX(-100%);
+    /* The actual "slide out" animation — a spring-flavored ease so it
+       feels like it's being pulled open, not just linearly wiped in. */
+    transition: transform 0.36s cubic-bezier(.22, .9, .32, 1.05);
+  }
+  body.nav-open .nav-drawer { transform: translateX(0); }
+  .nav-drawer .brand {
+    display: block; padding: 2px 26px 20px; margin-bottom: 6px;
     border-bottom: 1px solid var(--border);
+    font-weight: 700; font-size: 19px; color: var(--td-green-dark);
   }
-  nav.topbar .wrap {
-    display: flex; align-items: center; gap: 22px;
-    height: 52px; max-width: 1100px;
-    overflow-x: auto; white-space: nowrap;
+  .nav-drawer a {
+    display: block; padding: 12px 26px; font-size: 14.5px;
+    color: var(--ink-soft); text-decoration: none;
+    border-left: 3px solid transparent;
+    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
   }
-  nav.topbar .brand { font-weight: 700; color: var(--td-green-dark); margin-right: 6px; flex: none; }
-  nav.topbar a {
-    font-size: 13px; color: var(--ink-soft); text-decoration: none; flex: none;
-    padding: 6px 2px; border-bottom: 2px solid transparent;
+  .nav-drawer a:hover, .nav-drawer a:focus-visible {
+    color: var(--td-green-dark); background: var(--td-green-tint); border-left-color: var(--td-green);
   }
-  nav.topbar a:hover { color: var(--td-green-dark); border-bottom-color: var(--td-green); }
 
   /* ---------- Hero ---------- */
   header.hero {
@@ -277,23 +320,28 @@
 </head>
 <body>
 
-<nav class="topbar">
-  <div class="wrap">
-    <span class="brand">SoftPlay</span>
-    <a href="#overview">Overview</a>
-    <a href="#architecture">Architecture</a>
-    <a href="#lifecycle">Request Lifecycle</a>
-    <a href="#caching">Caching</a>
-    <a href="#llm">LLM Integration</a>
-    <a href="#verify-fix-agent">Verify &amp; Fix Agent</a>
-    <a href="#dataflow">Data Flow</a>
-    <a href="#components">Components</a>
-    <a href="#functions">Function Reference</a>
-    <a href="#ui-guide">UI Automation Guide</a>
-    <a href="#api-guide">API Automation Guide</a>
-    <a href="#glossary">Buttons Explained</a>
-    <a href="#faq">Troubleshooting</a>
-  </div>
+<button id="hamburgerBtn" class="hamburger-btn" type="button" aria-label="Open navigation menu" aria-expanded="false" aria-controls="navDrawer">
+  <span class="bar"></span><span class="bar"></span><span class="bar"></span>
+</button>
+
+<div id="navOverlay" class="nav-overlay"></div>
+
+<nav id="navDrawer" class="nav-drawer" aria-hidden="true">
+  <span class="brand">SoftPlay</span>
+  <a href="#overview">Overview</a>
+  <a href="#architecture">Architecture</a>
+  <a href="#lifecycle">Request Lifecycle</a>
+  <a href="#caching">Caching</a>
+  <a href="#llm">LLM Integration</a>
+  <a href="#verify-fix-agent">Verify &amp; Fix Agent</a>
+  <a href="#rag">Reusable Components (RAG)</a>
+  <a href="#dataflow">Data Flow</a>
+  <a href="#components">Components</a>
+  <a href="#functions">Function Reference</a>
+  <a href="#ui-guide">UI Automation Guide</a>
+  <a href="#api-guide">API Automation Guide</a>
+  <a href="#glossary">Buttons Explained</a>
+  <a href="#faq">Troubleshooting</a>
 </nav>
 
 <header class="hero">
@@ -330,6 +378,7 @@
       <li><span class="num">5</span><span class="desc"><b>Caching is intentionally simple:</b> three in-memory, TTL-bound caches (no Redis, no disk database) cut down repeated process spawns and repeated LLM token-counting calls, without ever risking a stale answer for something that matters.</span></li>
       <li><span class="num">6</span><span class="desc"><b>Every credential is encrypted by default</b> — in both modes, with no setting to turn it off. See "Auto Password Encryption" in Components.</span></li>
       <li><span class="num">7</span><span class="desc"><b>"Verify & Fix Code" is a real LangChain tool-calling agent</b> — not a hardcoded retry loop. It runs the code itself, reads whatever context it decides it needs, and only stops on a machine-verified pass — see "Verify & Fix Agent" below.</span></li>
+      <li><span class="num">8</span><span class="desc"><b>Code generation now reuses your team's own helpers, not just Copilot's guesses</b> — a local, zero-external-service RAG layer (see "Reusable Components (RAG)") retrieves the right one from <code>.github/rag/</code> and hands Copilot the exact code and import to call.</span></li>
     </ul>
   </div>
 </section>
@@ -692,6 +741,128 @@
   </div>
 </section>
 
+<!-- ================= REUSABLE COMPONENTS (RAG) ================= -->
+<section id="rag" class="alt">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="eyebrow">🦜🔗 New — built on the same LangChain foundation</span>
+      <h2>Reusable Components (RAG)</h2>
+      <p>Code generation now retrieves your team's own tested helpers — a database connection, an auth pattern, whatever you've already built — instead of asking Copilot to reinvent them from scratch every time.</p>
+    </div>
+
+    <div class="card" style="margin-bottom:28px;">
+      <span class="tag">Executive summary</span>
+      <h3 style="font-size:19px;">The AI reuses your team's real code instead of guessing at it</h3>
+      <p>
+        A team drops its existing helper classes into a one-time "Generate RAG Corpus format" step (Settings). From
+        then on, every "Start AI Code Generation" — UI or API mode — searches that library locally (no network call,
+        no external vector database, no FAISS) for anything relevant to the current scenario, and if it finds a
+        match, hands Copilot the exact code and import statement to call instead of writing new logic. A scenario
+        like <i>"Login to Postgres database, query a specific table, validate the result"</i> now reuses your team's
+        own <code>PostgresHelper</code> rather than Copilot inventing its own JDBC boilerplate — less hallucination,
+        more consistency across everyone using this extension.
+      </p>
+    </div>
+
+    <h2 class="inline-h">RAG core — fully local, zero external services</h2>
+    <div class="grid cols-3">
+      <div class="card tight">
+        <span class="tag">Schema</span>
+        <h3><code>ragTypes.ts</code></h3>
+        <p>The recipe schema — Zod-validated frontmatter (<code>id</code>, <code>title</code>, <code>tags</code>, <code>automationMode</code>, <code>language</code>, <code>imports</code>) every <code>.github/rag/*.md</code> file must satisfy.</p>
+      </div>
+      <div class="card tight">
+        <span class="tag">Parsing</span>
+        <h3><code>ragFrontmatter.ts</code></h3>
+        <p>Parses and serializes <code>.github/rag/*.md</code> recipe files — the same YAML-frontmatter-plus-Markdown-body shape as this page's own component library.</p>
+      </div>
+      <div class="card tight">
+        <span class="tag">@langchain/core — Embeddings</span>
+        <h3><code>tfidfEmbeddings.ts</code></h3>
+        <p>A zero-dependency <code>Embeddings</code> implementation — TF-IDF over unigrams AND bigrams, with light plural stemming and a hand-curated synonym table for test-automation/DB/API vocabulary (e.g. "db" ↔ "database"), L2-normalized. No model download, no WASM runtime, no network call, ever.</p>
+      </div>
+      <div class="card tight">
+        <span class="tag">@langchain/core — VectorStore</span>
+        <h3><code>flatVectorStore.ts</code></h3>
+        <p>Brute-force cosine-similarity search — the "no FAISS, no vector DB" answer. At a curated library's realistic size (dozens to a few hundred recipes), an exact linear scan is sub-millisecond and genuinely simpler than an approximate-nearest-neighbor index.</p>
+      </div>
+      <div class="card tight">
+        <span class="tag">Indexing</span>
+        <h3><code>ragIndexBuilder.ts</code> / <code>ragIndexer.ts</code></h3>
+        <p>Pure builder plus vscode-glue with mtime-based caching — the exact same "re-read only when something actually changed" pattern as <code>cache/fileCache.ts</code>.</p>
+      </div>
+      <div class="card tight">
+        <span class="tag">Retrieval</span>
+        <h3><code>ragRetriever.ts</code></h3>
+        <p>Runs the search and formats the prompt section — filtered by the current target language AND automation mode, so a Python-only helper never shows up while generating Java, or vice versa.</p>
+      </div>
+    </div>
+
+    <div class="callout" style="margin-bottom:28px;">
+      <span class="emoji">☝️</span>
+      <span><strong>Nothing to pick, nothing to guess:</strong> the "RAG Data" list in the Custom Instructions &amp; RAG Data panel is read-only — it exists so you can see what's indexed, not to select from. Retrieval always runs automatically on every generation, whether or not a user selects anything there. Whatever it finds (or doesn't) is already baked into the prompt the Token Monitoring bar measures before you click Generate — so if a relevant helper was matched, its tokens are already counted; if nothing matched, it added zero.</span>
+    </div>
+
+    <h2 class="inline-h">How one retrieval actually happens</h2>
+    <div class="card">
+      <div class="diagram">
+        <div class="row">
+          <div class="node webview"><b>User clicks "Start AI Code Generation"</b><span>linked scenario + chat-box text + recorded code/API request</span></div>
+        </div>
+        <div class="arrow-down">▼</div>
+        <div class="row">
+          <div class="node cache"><b>Query embedded locally</b><span>TF-IDF — pure arithmetic, nothing leaves the machine</span></div>
+        </div>
+        <div class="arrow-down">▼</div>
+        <div class="row">
+          <div class="node fs"><b>.github/rag/*.md searched</b><span>brute-force cosine similarity, filtered by language + automation mode</span></div>
+        </div>
+        <div class="arrow-down">▼</div>
+        <div class="row">
+          <div class="node engine"><b>Match found?</b><span>NO → prompt unchanged, zero extra cost. YES → continue below</span></div>
+        </div>
+        <div class="arrow-down">▼</div>
+        <div class="row">
+          <div class="node cloud"><b>"Reusable components available" section injected</b><span>exact code + exact import statement, sent to Copilot</span></div>
+        </div>
+      </div>
+    </div>
+
+    <h2 class="inline-h">"Generate RAG Corpus format" — the one-stop onboarding step</h2>
+    <div class="grid cols-2">
+      <div class="card">
+        <span class="tag">Settings — new segment</span>
+        <h3>Drop files in, recipes come out</h3>
+        <p>A drag-and-drop zone (plus a native file picker) in Settings accepts a broad range of source/config files. Each file's content is read client-side and sent to <code>ragCorpusGenerator.ts</code>, which asks Copilot to convert it into a properly-structured recipe via <code>generate-rag-recipe.md</code> — analyzing arbitrary code to infer a title, tags, target language, and the exact import statement is a genuine LLM judgment call, not something a template could do.</p>
+      </div>
+      <div class="card">
+        <span class="tag">Never a silent failure</span>
+        <h3>Malformed output still becomes a usable file</h3>
+        <p><code>ragRecipeNormalizer.ts</code> validates every model response; if it doesn't parse, it falls back to a filename-derived, schema-valid wrapper around the model's raw output and flags it for manual review — a generation request always produces <i>something</i>, never a silently dropped file. Batch overwrite confirmation and a live per-file progress log round out the flow; <code>.github/rag/</code> is created automatically if it doesn't exist yet.</p>
+      </div>
+    </div>
+
+    <div class="callout warn" style="margin-top:22px;">
+      <span class="emoji">⚠️</span>
+      <span>The generation prompt explicitly forbids reproducing a real secret from an uploaded file — these recipes are git-tracked and resent to Copilot on every future generation, so a real password/key must never end up inside one.</span>
+    </div>
+
+    <h2 class="inline-h">Quality &amp; testing</h2>
+    <div class="card">
+      <div class="grid cols-4">
+        <div class="card tight"><span class="tag">65/65 passing</span><p>Every RAG module added its own tests to the existing offline suite — <code>node --test</code>, zero new test-framework dependency.</p></div>
+        <div class="card tight"><span class="tag">Real scenario proven</span><p>The exact "login to Postgres, query a table, validate the result" example retrieves the right recipe — and only for the language/mode it applies to.</p></div>
+        <div class="card tight"><span class="tag">Zero external services</span><p>No vector database, no FAISS, no model download — the whole pipeline is pure TypeScript arithmetic plus local file reads.</p></div>
+        <div class="card tight"><span class="tag">Ships clean</span><p>Full compile and an actual <code>vsce package</code> both verified — the same discipline as every other feature on this page.</p></div>
+      </div>
+      <div class="callout" style="margin-top:18px;">
+        <span class="emoji">🗺️</span>
+        <span><strong>Phase 2 evaluated, deliberately not shipped:</strong> a local neural-embedding upgrade (a quantized model + WASM runtime, e.g. via <code>@xenova/transformers</code>) was prototyped far enough to size it honestly — a native-binary transitive dependency (<code>sharp</code>) stubbable via npm <code>overrides</code>, but the WASM runtime plus model still added roughly 70-100MB to an already ~118MB packaged extension, plus real runtime memory/latency cost, for a small internal recipe corpus. Rejected to preserve the zero-dependency, offline-first posture. Shipped instead: a dependency-free TF-IDF enhancement — bigram phrase-matching plus a hand-curated synonym table for common test-automation/DB/API vocabulary (see <code>tfidfEmbeddings.ts</code>) — real accuracy improvement, zero size cost, zero new runtime risk. Still flagged for later: extending retrieval into the Verify &amp; Fix agent's own fix-loop.</span>
+      </div>
+    </div>
+  </div>
+</section>
+
 <!-- ================= DATA FLOW ================= -->
 <section id="dataflow" class="alt">
   <div class="wrap">
@@ -820,6 +991,11 @@
       <tr><td>agent/verifyFixTools.ts</td><td>The three LangChain tools (<code>run_code</code>, <code>read_file</code>, <code>read_feature_file</code>) the agent is given, each a Zod-validated <code>StructuredTool</code>.</td></tr>
       <tr><td>agent/verifyFixOrchestrator.ts</td><td>Resolves the real Copilot model and wires the tools/adapter/agent loop together for one Verify &amp; Fix Code session.</td></tr>
       <tr><td>agent/scratchPath.ts</td><td>The <code>read_file</code> tool's path-containment guard — pure, dependency-free, and unit tested against 10 traversal attack shapes.</td></tr>
+      <tr><td>rag/ragTypes.ts, ragFrontmatter.ts</td><td>The reusable-component recipe schema (Zod) and <code>.github/rag/*.md</code> parse/serialize logic.</td></tr>
+      <tr><td>rag/tfidfEmbeddings.ts, flatVectorStore.ts</td><td>A local, zero-dependency LangChain <code>Embeddings</code> + <code>VectorStore</code> pair — TF-IDF plus brute-force cosine similarity, no external vector DB or FAISS.</td></tr>
+      <tr><td>rag/ragIndexBuilder.ts, ragIndexer.ts</td><td>Builds and mtime-caches the RAG index from <code>.github/rag/*.md</code>.</td></tr>
+      <tr><td>rag/ragRetriever.ts</td><td>Retrieves and formats the "Reusable components available" prompt section, filtered by language/automation mode.</td></tr>
+      <tr><td>rag/ragCorpusGenerator.ts, ragRecipeNormalizer.ts</td><td>"Generate RAG Corpus format" (Settings) — turns an uploaded file into a recipe via Copilot, with a schema-valid fallback if the model's output doesn't parse.</td></tr>
     </table>
   </div>
 </section>
@@ -943,6 +1119,18 @@
         <div class="fn"><span class="sig">createRunCodeTool() / createReadScratchFileTool() / createReadFeatureFileTool()</span><span class="desc">The three Zod-validated LangChain tools the agent is given.</span></div>
         <div class="fn"><span class="sig">runVerifyFixAgent()</span><span class="desc">Resolves the Copilot model, builds the tools, and starts one agent session.</span></div>
         <div class="fn"><span class="sig">resolveWithinScratchDir()</span><span class="desc">Pure path-containment check behind read_file — unit tested against 10 traversal shapes.</span></div>
+      </div>
+    </details>
+
+    <details class="filecard">
+      <summary><span class="path">rag/ragTypes.ts, ragFrontmatter.ts, tfidfEmbeddings.ts, flatVectorStore.ts, ragIndexBuilder.ts, ragIndexer.ts, ragRetriever.ts, ragCorpusGenerator.ts, ragRecipeNormalizer.ts</span><span class="role">🦜🔗 Reusable Components (RAG)</span></summary>
+      <div class="fnlist">
+        <div class="fn"><span class="sig">parseRagFile() / serializeRagFile()</span><span class="desc">Parses/writes a `.github/rag/*.md` recipe's YAML frontmatter + body, Zod-validated.</span></div>
+        <div class="fn"><span class="sig">TfIdfEmbeddings.fit() / embedDocuments() / embedQuery()</span><span class="desc">Zero-dependency LangChain Embeddings — TF-IDF over unigrams + bigrams with synonym/stemming normalization, L2-normalized.</span></div>
+        <div class="fn"><span class="sig">LocalFlatVectorStore.similaritySearchVectorWithScore()</span><span class="desc">Brute-force cosine similarity with metadata filtering — the "no FAISS" vector store.</span></div>
+        <div class="fn"><span class="sig">buildRagIndex() / getOrBuildRagIndex()</span><span class="desc">Pure index assembly + mtime-cached vscode glue for `.github/rag/`.</span></div>
+        <div class="fn"><span class="sig">retrieveRagMatches() / formatRagPromptSection()</span><span class="desc">Runs the search and formats the "Reusable components available" prompt section — `''` when nothing matches.</span></div>
+        <div class="fn"><span class="sig">generateRagCorpus() / normalizeGeneratedRecipe()</span><span class="desc">"Generate RAG Corpus format" — converts an uploaded file via Copilot into a recipe, with a schema-valid fallback on malformed output.</span></div>
       </div>
     </details>
 
@@ -1195,6 +1383,45 @@
     <p class="muted">Close this browser tab to return to VS Code.</p>
   </div>
 </footer>
+
+<script>
+  (function () {
+    var body = document.body;
+    var hamburgerBtn = document.getElementById('hamburgerBtn');
+    var overlay = document.getElementById('navOverlay');
+    var drawer = document.getElementById('navDrawer');
+
+    function openNav() {
+      body.classList.add('nav-open');
+      hamburgerBtn.setAttribute('aria-expanded', 'true');
+      drawer.setAttribute('aria-hidden', 'false');
+    }
+    function closeNav() {
+      body.classList.remove('nav-open');
+      hamburgerBtn.setAttribute('aria-expanded', 'false');
+      drawer.setAttribute('aria-hidden', 'true');
+    }
+
+    hamburgerBtn.addEventListener('click', function () {
+      if (body.classList.contains('nav-open')) {
+        closeNav();
+      } else {
+        openNav();
+      }
+    });
+    overlay.addEventListener('click', closeNav);
+    // Jumping to a section closes the drawer behind it — the whole point
+    // of a link inside it is to go look at that section next.
+    drawer.querySelectorAll('a').forEach(function (link) {
+      link.addEventListener('click', closeNav);
+    });
+    document.addEventListener('keydown', function (event) {
+      if (event.key === 'Escape') {
+        closeNav();
+      }
+    });
+  })();
+</script>
 
 </body>
 </html>

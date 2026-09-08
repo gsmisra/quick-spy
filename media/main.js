@@ -22,8 +22,13 @@
   const codeRefreshBtn = document.getElementById('codeRefreshBtn');
   const collapseCodeBtn = document.getElementById('collapseCodeBtn');
   const playwrightCodePanel = document.getElementById('playwrightCodePanel');
-  const aiAssistSection = document.getElementById('aiAssistSection');
+  // "Custom Instructions & RAG Data" — its own top-level collapsible
+  // section (see objectSpyPanel.ts), shown only while "Link with GitHub
+  // Copilot LLM" is on, same as the old (now-retired) aiAssistSection div
+  // this replaces.
+  const customInstructionsRagSection = document.getElementById('customInstructionsRagSection');
   const promptFilesList = document.getElementById('promptFilesList');
+  const ragFilesList = document.getElementById('ragFilesList');
   const chatComposer = document.getElementById('chatComposer');
   const chatMessages = document.getElementById('chatMessages');
   const chatInput = document.getElementById('chatInput');
@@ -1165,7 +1170,7 @@
 
   function autoResizeChatInput() {
     chatInput.style.height = 'auto';
-    chatInput.style.height = Math.min(chatInput.scrollHeight, 90) + 'px';
+    chatInput.style.height = Math.min(chatInput.scrollHeight, 150) + 'px';
   }
 
   chatSendBtn.addEventListener('click', stageChatMessage);
@@ -1389,6 +1394,9 @@
       case 'promptFiles':
         renderPromptFiles(message.payload);
         break;
+      case 'ragFiles':
+        renderRagFiles(message.payload);
+        break;
       case 'aiStatus':
         applyAiStatus(message.payload);
         break;
@@ -1426,9 +1434,10 @@
     // here, whether this update originated from this toggle, the Settings
     // panel, or extension activation.
     copilotEnabledToggle.checked = enabled;
-    // aiAssistSection nests chatComposer, so hiding it here already hides
-    // the composer too -- no need to separately toggle chatComposer.hidden.
-    aiAssistSection.hidden = !enabled;
+    // customInstructionsRagSection nests chatComposer, so hiding it here
+    // already hides the composer too -- no need to separately toggle
+    // chatComposer.hidden.
+    customInstructionsRagSection.hidden = !enabled;
     if (enabled) {
       vscode.postMessage({ type: 'refreshPromptFiles' });
     } else {
@@ -1486,6 +1495,26 @@
       promptFilesList.appendChild(label);
     }
     postSelectedInstructionFiles();
+  }
+
+  /** "RAG Data" — read-only, unlike Custom Instructions above: which
+   * recipe(s) actually apply to a given request is decided automatically
+   * by retrieval scoring (see rag/ragRetriever.ts), not by a checkbox here,
+   * so this just shows what's currently indexed under .github/rag/. */
+  function renderRagFiles(files) {
+    if (!files.length) {
+      ragFilesList.innerHTML = '<div class="prompt-files-empty">No recipes found under .github/rag/.</div>';
+      return;
+    }
+    ragFilesList.innerHTML = '';
+    for (const file of files) {
+      const item = document.createElement('div');
+      item.className = 'prompt-file-item';
+      const text = document.createElement('span');
+      text.textContent = file;
+      item.appendChild(text);
+      ragFilesList.appendChild(item);
+    }
   }
 
   function applyCode(payload) {

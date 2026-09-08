@@ -580,8 +580,9 @@ body.vscode-light .code-editor-wrap {
   100% { transform: translateX(250%); }
 }
 
-/* "Custom md files" collapsible sub-section — its own soft card nested
-   inside the Generated Code section. */
+/* "Custom Instructions" and "RAG Data" — the two collapsed-by-default
+   sub-segments nested inside the "Custom Instructions & RAG Data" section,
+   each its own distinct soft card. */
 .ai-assist {
   border-radius: var(--clay-radius-sm);
   background: var(--vscode-editor-background);
@@ -676,13 +677,31 @@ body.vscode-light .code-editor-wrap {
   gap: 8px;
 }
 
+.chat-input-label {
+  font-size: 0.78em;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #0084ff;
+  margin-bottom: 6px;
+}
+
 .chat-input {
   flex: 1;
   resize: none;
-  max-height: 90px;
+  /* Bigger by default (min-height) and a taller auto-grow ceiling
+     (max-height, matched by the JS cap in main.js's autoResizeChatInput())
+     than before — more room to type a real instruction without the box
+     feeling cramped. */
+  min-height: 54px;
+  max-height: 150px;
   padding: 9px 16px;
   border-radius: 18px;
-  border: none;
+  /* Always-on highlight (not just on focus) so this box reads as the
+     prominent "talk to the LLM" affordance in the segment, not just
+     another quiet form field. */
+  border: 1px solid #0084ff;
+  box-shadow: 0 0 0 1px rgba(0, 132, 255, 0.35);
   background: var(--vscode-input-background);
   color: var(--vscode-input-foreground);
   font-family: inherit;
@@ -691,7 +710,8 @@ body.vscode-light .code-editor-wrap {
 }
 
 .chat-input:focus {
-  outline: 1px solid #0084ff;
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(0, 132, 255, 0.6);
 }
 
 .chat-send-btn {

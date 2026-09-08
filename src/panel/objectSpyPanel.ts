@@ -15,6 +15,8 @@ import { readFileCachedSync, readWorkspaceFileCached } from '../cache/fileCache'
 import * as secretVault from '../security/secretVault';
 import { encryptPasswordLiteralsInCode } from '../security/uiPasswordRedactor';
 import { runVerifyFixAgent } from '../agent/verifyFixOrchestrator';
+import { getOrBuildRagIndex } from '../rag/ragIndexer';
+import { retrieveRagMatches, formatRagPromptSection } from '../rag/ragRetriever';
 
 type InboundMessage =
   | { type: 'start'; payload?: string }
@@ -484,6 +486,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
     // ENC[v1:...] token plus its decrypt helper is a different length than
     // the raw plaintext it replaces).
     const measuredCode = isApiMode ? playwrightCode : (await encryptPasswordLiteralsInCode(this.context, playwrightCode, settings.language)).code;
+    const ragSection = await this.buildRagSection(settings, isApiMode, measuredCode, apiDetails, customInstructions);
     const prompt = isApiMode
       ? await buildApiLlmPrompt(
           settings.language,
@@ -493,6 +496,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
           apiDetails!,
           customInstructions,
           this.getEncryptSecret(),
+          ragSection,
           this.linkedScenario,
           this.currentSuggestedBaseName()
         )
@@ -504,6 +508,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
           instructions,
           measuredCode,
           customInstructions,
+          ragSection,
           this.linkedScenario,
           this.currentSuggestedBaseName()
         );
@@ -624,10 +629,22 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
   // extension calls sendRequest.
   // -----------------------------------------------------------------------
 
+  /** Refreshes BOTH file lists in the "Custom Instructions & RAG Data"
+   * segment from one button — Custom Instructions (`.github/*.md`,
+   * explicitly EXCLUDING `.github/rag/**` now that that subfolder has its
+   * own distinct meaning — see rag/ragIndexer.ts) and RAG Data
+   * (`.github/rag/*.md`, read-only: which components are relevant to a
+   * given request is decided automatically by retrieval scoring, not by
+   * checking a box here — see rag/ragRetriever.ts). */
   private async refreshPromptFiles(): Promise<void> {
-    const files = await vscode.workspace.findFiles('.github/**/*.md');
-    const relPaths = files.map((f) => vscode.workspace.asRelativePath(f)).sort();
+    const [instructionFiles, ragFiles] = await Promise.all([
+      vscode.workspace.findFiles('.github/**/*.md', '.github/rag/**'),
+      vscode.workspace.findFiles('.github/rag/*.md')
+    ]);
+    const relPaths = instructionFiles.map((f) => vscode.workspace.asRelativePath(f)).sort();
+    const ragRelPaths = ragFiles.map((f) => vscode.workspace.asRelativePath(f)).sort();
     this.webview?.postMessage({ type: 'promptFiles', payload: relPaths });
+    this.webview?.postMessage({ type: 'ragFiles', payload: ragRelPaths });
   }
 
   /** "Start AI Code Generation" (Control Panel) — the ONLY way AI processing
@@ -1301,6 +1318,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
       playwrightCode = redacted.code;
       encryptedCount = redacted.count;
     }
+    const ragSection = await this.buildRagSection(settings, isApiMode, playwrightCode, apiDetails, customInstructions);
     const prompt = isApiMode
       ? await buildApiLlmPrompt(
           settings.language,
@@ -1310,6 +1328,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
           apiDetails!,
           customInstructions,
           this.getEncryptSecret(),
+          ragSection,
           this.linkedScenario,
           this.currentSuggestedBaseName()
         )
@@ -1321,6 +1340,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
           instructions,
           playwrightCode,
           customInstructions,
+          ragSection,
           this.linkedScenario,
           this.currentSuggestedBaseName()
         );
@@ -1441,6 +1461,64 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
    * (SoftPlay's "Auto Password Encryption") rather than sent in plaintext. */
   private getEncryptSecret(): SecretEncryptor {
     return (plaintext: string) => secretVault.encryptSecret(this.context, plaintext);
+  }
+
+  /**
+   * Builds the "Reusable components available" prompt section (see
+   * rag/ragRetriever.ts) for the CURRENT request — or `''` when RAG is
+   * turned off in Settings, no workspace folder is open, or
+   * `.github/rag` has nothing indexed yet. Every one of those is a silent,
+   * normal no-op, never surfaced as an error: a team that hasn't adopted
+   * this yet sees zero behavior change. Shared by runLlmRefinement() (the
+   * real send) and updateTokenEstimate() (so the token estimate reflects
+   * exactly what a real send would include, same reasoning as Auto
+   * Password Encryption's own redaction pass being shared between the two).
+   *
+   * The query text embedded for retrieval purposes is built from the
+   * linked Gherkin scenario (if any — the most business-language-rich
+   * signal available, e.g. "Login to Postgres database, query a specific
+   * table..."), the chat-box free text, and either the recorded Playwright
+   * code (UI mode) or the request's method+URL (API mode). This never
+   * needs Auto Password Encryption's redaction pass first — embedding is
+   * pure local arithmetic (TF-IDF, see rag/tfidfEmbeddings.ts), so nothing
+   * computed from this text ever leaves the machine, unlike the prompt
+   * text itself.
+   */
+  private async buildRagSection(
+    settings: ObjectSpySettings,
+    isApiMode: boolean,
+    playwrightCode: string,
+    apiDetails: ApiRequestDetails | undefined,
+    customInstructions: string
+  ): Promise<string> {
+    if (!settings.ragEnabled) {
+      return '';
+    }
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri;
+    if (!workspaceRoot) {
+      return '';
+    }
+    const index = await getOrBuildRagIndex(workspaceRoot, (message) =>
+      this.outputChannel.appendLine(`Reusable components (RAG): ${message}`)
+    );
+    if (!index) {
+      return '';
+    }
+    const queryText = [
+      this.linkedScenario?.rawText,
+      customInstructions,
+      isApiMode ? `${apiDetails?.method ?? ''} ${apiDetails?.url ?? ''}`.trim() : playwrightCode
+    ]
+      .filter((part): part is string => !!part && part.trim().length > 0)
+      .join('\n');
+
+    const matches = await retrieveRagMatches(index, queryText, settings.language, settings.automationMode);
+    if (matches.length > 0) {
+      this.outputChannel.appendLine(
+        `Reusable components (RAG): matched ${matches.length} of ${index.recipes.length} indexed — ${matches.map((m) => m.id).join(', ')}.`
+      );
+    }
+    return formatRagPromptSection(matches, settings.language);
   }
 
   private async readInstructionFiles(relPaths: string[]): Promise<{ path: string; content: string }[]> {
@@ -1617,6 +1695,44 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
     </div>
   </details>
 
+  <details class="section" id="customInstructionsRagSection" open hidden>
+    <summary>Custom Instructions &amp; RAG Data</summary>
+    <div class="section-body">
+      <details class="ai-assist" id="customInstructionsSubsection">
+        <summary>Custom Instructions</summary>
+        <div class="ai-assist-body">
+          <div class="ai-files-header">Instruction / skill / prompt files (<code>.github/*.md</code>)</div>
+          <div id="promptFilesList" class="prompt-files-list">
+            <div class="prompt-files-empty">No .md files found yet — click Refresh.</div>
+          </div>
+        </div>
+      </details>
+
+      <details class="ai-assist" id="ragDataSubsection">
+        <summary>RAG Data</summary>
+        <div class="ai-assist-body">
+          <div class="ai-files-header">Reusable component recipes (<code>.github/rag/*.md</code>) — matched automatically, nothing to select here</div>
+          <div id="ragFilesList" class="prompt-files-list">
+            <div class="prompt-files-empty">No recipes found yet — click Refresh.</div>
+          </div>
+        </div>
+      </details>
+
+      <div class="toolbar-row">
+        <button id="refreshPromptFilesBtn" class="btn btn-small btn-silver" title="Re-scan .github/*.md (Custom Instructions) and .github/rag/*.md (RAG Data)">Refresh file list</button>
+      </div>
+
+      <div id="chatComposer" class="chat-composer">
+        <div id="chatMessages" class="chat-messages"></div>
+        <div class="chat-input-label">Instant instructions to LLM</div>
+        <div class="chat-input-row">
+          <textarea id="chatInput" class="chat-input" rows="3" placeholder="Add any details for the AI to follow…"></textarea>
+          <button id="chatSendBtn" class="chat-send-btn" title="Add to the request — click 'Start AI Code Generation' below to actually send" aria-label="Add">➤</button>
+        </div>
+      </div>
+    </div>
+  </details>
+
   <details class="section" id="generatedCodeSection" open>
     <summary>Generated Code</summary>
     <div class="section-body">
@@ -1624,33 +1740,11 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
         <span class="ai-generating-text">Generating AI code…</span>
         <span class="ai-generating-track"><span class="ai-generating-fill"></span></span>
       </div>
-      <div id="aiAssistSection" class="ai-assist" hidden>
-        <details>
-          <summary>Custom md files</summary>
-          <div class="ai-assist-body">
-            <div class="ai-files-header">Instruction / skill / prompt files (<code>.github/*.md</code>)</div>
-            <div id="promptFilesList" class="prompt-files-list">
-              <div class="prompt-files-empty">No .md files found yet — click Refresh.</div>
-            </div>
-            <div class="ai-assist-actions">
-              <button id="refreshPromptFilesBtn" class="btn btn-small">Refresh file list</button>
-            </div>
-
-            <div id="chatComposer" class="chat-composer">
-              <div id="chatMessages" class="chat-messages"></div>
-              <div class="chat-input-row">
-                <textarea id="chatInput" class="chat-input" rows="1" placeholder="Add any details for the AI to follow…"></textarea>
-                <button id="chatSendBtn" class="chat-send-btn" title="Add to the request — click 'Start AI Code Generation' below to actually send" aria-label="Add">➤</button>
-              </div>
-            </div>
-          </div>
-        </details>
-        <div class="toolbar-row ai-open-row">
-          <button id="generateFeatureFileBtn" class="btn btn-silver" title="No feature file to link yet? Record a flow with Start above, then send the recorded Playwright Code (plus anything in the chat box) to the LLM to generate a brand-new BDD Gherkin feature file">Start AI Feature File Generation</button>
-          <button id="startAiProcessingBtn" class="btn btn-silver" title="Send the current Playwright Code, Settings (browser/language/version), linked scenario or selected steps, checked Custom md files, and anything in the chat box below to the LLM for AI code generation">Start AI Code Generation</button>
-          <button id="openAiCodeBtn" class="btn btn-silver" hidden>Open AI Generated Code</button>
-          <span id="aiStatusLabel" class="llm-status"></span>
-        </div>
+      <div class="toolbar-row ai-open-row">
+        <button id="generateFeatureFileBtn" class="btn btn-silver" title="No feature file to link yet? Record a flow with Start above, then send the recorded Playwright Code (plus anything in the chat box) to the LLM to generate a brand-new BDD Gherkin feature file">Start AI Feature File Generation</button>
+        <button id="startAiProcessingBtn" class="btn btn-silver" title="Send the current Playwright Code, Settings (browser/language/version), linked scenario or selected steps, checked Custom Instructions files, and anything in the chat box below to the LLM for AI code generation">Start AI Code Generation</button>
+        <button id="openAiCodeBtn" class="btn btn-silver" hidden>Open AI Generated Code</button>
+        <span id="aiStatusLabel" class="llm-status"></span>
       </div>
 
       <div class="code-panels">
@@ -2083,6 +2177,11 @@ async function buildApiLlmPrompt(
   apiDetails: ApiRequestDetails,
   customInstructions: string,
   encryptSecret: SecretEncryptor,
+  /** Pre-formatted "Reusable components available" section (see
+   * rag/ragRetriever.ts's formatRagPromptSection()) — already `''` when
+   * retrieval is disabled/has nothing relevant, so callers never need a
+   * separate on/off branch here. */
+  ragSection: string,
   linkedScenario?: LinkedScenario,
   suggestedClassName?: string
 ): Promise<string> {
@@ -2131,6 +2230,9 @@ async function buildApiLlmPrompt(
   const apiSummary = await buildApiRequestSummary(apiDetails, encryptSecret);
   parts.push(`\n## API Request Details — the request to build test automation around\n${apiSummary}`);
   appendPasswordEncryptionSection(parts, apiSummary, language);
+  if (ragSection) {
+    parts.push(ragSection);
+  }
 
   if (linkedScenario) {
     parts.push(
@@ -2320,6 +2422,8 @@ function buildLlmPrompt(
   instructions: { path: string; content: string }[],
   playwrightCode: string,
   customInstructions: string,
+  /** See buildApiLlmPrompt()'s identical parameter. */
+  ragSection: string,
   linkedScenario?: LinkedScenario,
   suggestedClassName?: string
 ): string {
@@ -2432,6 +2536,9 @@ function buildLlmPrompt(
     `\n## Reference Playwright-generated code (real \`codegen\` output — see note above about credentials) — match this structure and style, reuse its locators as-is\n\`\`\`${language}\n${playwrightCode}\n\`\`\``
   );
   appendPasswordEncryptionSection(parts, playwrightCode, language);
+  if (ragSection) {
+    parts.push(ragSection);
+  }
 
   // "Link Feature file" (Control Panel) — a Gherkin Scenario/Scenario
   // Outline the user picked in the Feature File view. Present only when

@@ -1,11 +1,13 @@
 import * as vscode from 'vscode';
 import { LANGUAGE_VERSIONS, Language, ObjectSpySettings, SettingsStore } from '../settings/settingsStore';
 import { listCopilotModels } from '../llm/copilotClient';
+import { generateRagCorpus, GenerationProgress, UploadedFile } from '../rag/ragCorpusGenerator';
 
 type InboundMessage =
   | { type: 'update'; payload: Partial<ObjectSpySettings> }
   | { type: 'listModels' }
-  | { type: 'openArchitectureDoc' };
+  | { type: 'openArchitectureDoc' }
+  | { type: 'generateRagCorpus'; payload: { files: UploadedFile[] } };
 
 /**
  * The Settings menu — deliberately a separate webview panel from the main
@@ -20,6 +22,10 @@ type InboundMessage =
 export class SettingsPanel implements vscode.Disposable {
   private panel: vscode.WebviewPanel | undefined;
   private readonly disposables: vscode.Disposable[] = [];
+  /** Cancelled if the panel is disposed mid-generation, so a closed
+   * Settings panel doesn't leave a "Generate RAG Corpus format" batch
+   * quietly running in the background. */
+  private ragGenerationCts: vscode.CancellationTokenSource | undefined;
 
   constructor(private readonly context: vscode.ExtensionContext, private readonly settingsStore: SettingsStore) {
     this.disposables.push(this.settingsStore.onChange((settings) => this.postSettings(settings)));
@@ -58,6 +64,8 @@ export class SettingsPanel implements vscode.Disposable {
   }
 
   dispose(): void {
+    this.ragGenerationCts?.cancel();
+    this.ragGenerationCts?.dispose();
     this.panel?.dispose();
     this.disposables.forEach((d) => d.dispose());
   }
@@ -70,7 +78,65 @@ export class SettingsPanel implements vscode.Disposable {
       this.panel?.webview.postMessage({ type: 'models', payload: models });
     } else if (message.type === 'openArchitectureDoc') {
       await this.openArchitectureDoc();
+    } else if (message.type === 'generateRagCorpus') {
+      await this.handleGenerateRagCorpus(message.payload.files);
     }
+  }
+
+  /**
+   * "Generate RAG Corpus format" — turns each uploaded file into a
+   * `.github/rag/<name>.md` reusable-component recipe via Copilot (see
+   * rag/ragCorpusGenerator.ts). Requires the same "Link with GitHub
+   * Copilot LLM" + model selection every other AI feature does — this is
+   * a real LLM call (analyzing arbitrary code to infer a title/tags/
+   * imports isn't something a template can do), not a local operation.
+   */
+  private async handleGenerateRagCorpus(files: UploadedFile[]): Promise<void> {
+    const settings = this.settingsStore.get();
+    if (!settings.copilotEnabled || !settings.copilotModelId) {
+      this.panel?.webview.postMessage({
+        type: 'ragGenerationDone',
+        payload: { succeeded: 0, skipped: 0, failed: files.length, error: 'Enable "Link with GitHub Copilot LLM" (Control Panel) and pick a model in Settings first.' }
+      });
+      return;
+    }
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri;
+    if (!workspaceRoot) {
+      this.panel?.webview.postMessage({
+        type: 'ragGenerationDone',
+        payload: { succeeded: 0, skipped: 0, failed: files.length, error: 'Open a workspace folder first — recipes are saved under its .github/rag folder.' }
+      });
+      return;
+    }
+    if (files.length === 0) {
+      return;
+    }
+
+    this.ragGenerationCts?.cancel();
+    this.ragGenerationCts?.dispose();
+    const cts = new vscode.CancellationTokenSource();
+    this.ragGenerationCts = cts;
+
+    const result = await generateRagCorpus({
+      modelId: settings.copilotModelId,
+      files,
+      workspaceRoot,
+      cancellationToken: cts.token,
+      onProgress: (progress: GenerationProgress) => {
+        this.panel?.webview.postMessage({ type: 'ragGenerationProgress', payload: progress });
+      },
+      confirmOverwrite: async (existingFileNames) => {
+        const choice = await vscode.window.showWarningMessage(
+          `${existingFileNames.length} recipe file(s) already exist in .github/rag and would be overwritten: ${existingFileNames.join(', ')}. Overwrite them?`,
+          { modal: true },
+          'Overwrite',
+          'Skip Existing'
+        );
+        return choice === 'Overwrite';
+      }
+    });
+
+    this.panel?.webview.postMessage({ type: 'ragGenerationDone', payload: result });
   }
 
   /**
@@ -205,6 +271,86 @@ export class SettingsPanel implements vscode.Disposable {
       color: var(--td-green-dark);
       text-decoration: underline;
     }
+    .btn {
+      padding: 6px 14px;
+      border: none;
+      border-radius: 4px;
+      background: var(--vscode-button-background);
+      color: var(--vscode-button-foreground);
+      cursor: pointer;
+      font-size: 0.9em;
+    }
+    .btn:hover:not(:disabled) { background: var(--vscode-button-hoverBackground); }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-secondary {
+      background: var(--vscode-button-secondaryBackground, transparent);
+      color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+      border: 1px solid var(--vscode-panel-border);
+    }
+    .rag-dropzone {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 10px;
+      padding: 22px 16px;
+      border: 2px dashed var(--vscode-panel-border);
+      border-radius: 6px;
+      text-align: center;
+      color: var(--vscode-descriptionForeground);
+      font-size: 0.88em;
+      transition: border-color 0.15s ease, background 0.15s ease;
+    }
+    /* TD Bank green highlight while a drag is actually over the zone —
+       fixed brand color like --td-green elsewhere, not theme-derived, so
+       the "you're about to drop here" cue reads the same in every theme. */
+    .rag-dropzone.dragover {
+      border-color: var(--td-green);
+      background: rgba(84, 185, 72, 0.08);
+    }
+    .rag-file-list {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      margin-top: 10px;
+    }
+    .rag-file-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 10px;
+      border-radius: 4px;
+      background: var(--vscode-input-background);
+      font-size: 0.85em;
+    }
+    .rag-file-item .rag-file-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .rag-file-item .rag-file-size { flex: none; color: var(--vscode-descriptionForeground); }
+    .rag-file-remove {
+      flex: none;
+      background: none;
+      border: none;
+      color: var(--vscode-descriptionForeground);
+      cursor: pointer;
+      font-size: 0.9em;
+      padding: 0 4px;
+    }
+    .rag-file-remove:hover { color: var(--vscode-errorForeground, #f14c4c); }
+    .rag-progress {
+      margin-top: 12px;
+      max-height: 160px;
+      overflow-y: auto;
+      font-size: 0.8em;
+      font-family: var(--vscode-editor-font-family, monospace);
+      background: var(--vscode-editor-background);
+      border: 1px solid var(--vscode-panel-border);
+      border-radius: 4px;
+      padding: 8px 10px;
+    }
+    .rag-progress-line { padding: 2px 0; white-space: pre-wrap; }
+    .rag-progress-line.success { color: #3fb950; }
+    .rag-progress-line.error { color: var(--vscode-errorForeground, #f14c4c); }
+    .rag-progress-line.skipped, .rag-progress-line.started { color: var(--vscode-descriptionForeground); }
+    .rag-progress-line.done { font-weight: 600; color: var(--vscode-foreground); }
   </style>
 </head>
 <body>
@@ -264,6 +410,38 @@ export class SettingsPanel implements vscode.Disposable {
     <span class="status-text" id="copilotStatusText"></span>
   </div>
 
+  <h2>Reusable Components (RAG)</h2>
+  <div class="field">
+    <label>
+      Use reusable components
+      <span class="hint">Augments code-generation prompts with the best-matching entries from <code>.github/rag/</code>, if any exist. Safe to leave on — retrieval simply finds nothing when that folder is empty or missing.</span>
+    </label>
+    <input type="checkbox" id="ragEnabledToggle" />
+  </div>
+
+  <h2>Generate RAG Corpus Format</h2>
+  <p class="note" style="margin-top: 0;">
+    Drop existing helper/config files below — SoftPlay asks Copilot to turn each one into a well-structured reusable-component
+    recipe and saves it into <code>.github/rag/</code> (creating that folder if it doesn't exist yet), named after the
+    original file. Requires "Link with GitHub Copilot LLM" (Control Panel) and a model picked above.
+  </p>
+  <div id="ragDropZone" class="rag-dropzone">
+    <span>Drop files here, or</span>
+    <button type="button" id="ragBrowseBtn" class="btn btn-secondary">Choose Files…</button>
+    <input
+      type="file"
+      id="ragFileInput"
+      multiple
+      hidden
+      accept=".java,.py,.js,.ts,.jsx,.tsx,.sh,.bash,.zsh,.bat,.cmd,.ps1,.json,.xml,.yml,.yaml,.properties,.ini,.toml,.sql,.scala,.kt,.kts,.rb,.go,.cs,.gradle,.groovy,.conf,.cfg,.env.example,.md,.txt"
+    />
+  </div>
+  <div id="ragFileList" class="rag-file-list"></div>
+  <div style="display: flex; justify-content: flex-end; margin-top: 10px;">
+    <button type="button" id="ragGenerateBtn" class="btn" disabled>Generate</button>
+  </div>
+  <div id="ragProgress" class="rag-progress" hidden></div>
+
   <p class="note">Changes apply immediately and persist across VS Code restarts.</p>
 
   <div class="architecture-link-row">
@@ -288,6 +466,124 @@ export class SettingsPanel implements vscode.Disposable {
 
       document.getElementById('architectureLink').addEventListener('click', () => {
         vscode.postMessage({ type: 'openArchitectureDoc' });
+      });
+
+      const ragEnabledToggle = document.getElementById('ragEnabledToggle');
+      ragEnabledToggle.addEventListener('change', () => {
+        vscode.postMessage({ type: 'update', payload: { ragEnabled: ragEnabledToggle.checked } });
+      });
+
+      // --- "Generate RAG Corpus format" — drop zone / file picker / Generate ---
+      const ragDropZone = document.getElementById('ragDropZone');
+      const ragFileInput = document.getElementById('ragFileInput');
+      const ragBrowseBtn = document.getElementById('ragBrowseBtn');
+      const ragFileListEl = document.getElementById('ragFileList');
+      const ragGenerateBtn = document.getElementById('ragGenerateBtn');
+      const ragProgressEl = document.getElementById('ragProgress');
+      // Generous enough for a real source/config file, small enough to
+      // guard against a pathological paste bloating the Copilot prompt —
+      // this content is read entirely into memory and sent as-is.
+      const RAG_MAX_FILE_BYTES = 200 * 1024;
+      let ragPendingFiles = []; // { fileName, content }
+
+      function ragAppendProgressLine(fileName, status, message) {
+        ragProgressEl.hidden = false;
+        const line = document.createElement('div');
+        line.className = 'rag-progress-line ' + status;
+        line.textContent = fileName ? fileName + ' — ' + (message || status) : message || status;
+        ragProgressEl.appendChild(line);
+        ragProgressEl.scrollTop = ragProgressEl.scrollHeight;
+      }
+
+      function ragUpdateFileListUI() {
+        ragFileListEl.innerHTML = '';
+        ragPendingFiles.forEach((file, index) => {
+          const item = document.createElement('div');
+          item.className = 'rag-file-item';
+
+          const name = document.createElement('span');
+          name.className = 'rag-file-name';
+          name.textContent = file.fileName;
+          name.title = file.fileName;
+
+          const size = document.createElement('span');
+          size.className = 'rag-file-size';
+          size.textContent = (file.content.length / 1024).toFixed(1) + ' KB';
+
+          const removeBtn = document.createElement('button');
+          removeBtn.type = 'button';
+          removeBtn.className = 'rag-file-remove';
+          removeBtn.title = 'Remove';
+          removeBtn.textContent = '✕';
+          removeBtn.addEventListener('click', () => {
+            ragPendingFiles.splice(index, 1);
+            ragUpdateFileListUI();
+          });
+
+          item.appendChild(name);
+          item.appendChild(size);
+          item.appendChild(removeBtn);
+          ragFileListEl.appendChild(item);
+        });
+        ragGenerateBtn.disabled = ragPendingFiles.length === 0;
+      }
+
+      function ragAddFiles(fileList) {
+        const reads = Array.from(fileList).map((file) => {
+          return new Promise((resolve) => {
+            if (file.size > RAG_MAX_FILE_BYTES) {
+              ragAppendProgressLine(file.name, 'error', 'Skipped — larger than 200 KB.');
+              resolve(null);
+              return;
+            }
+            const reader = new FileReader();
+            reader.onload = () => resolve({ fileName: file.name, content: String(reader.result || '') });
+            reader.onerror = () => {
+              ragAppendProgressLine(file.name, 'error', 'Could not read this file.');
+              resolve(null);
+            };
+            reader.readAsText(file);
+          });
+        });
+        Promise.all(reads).then((results) => {
+          results.filter(Boolean).forEach((file) => ragPendingFiles.push(file));
+          ragUpdateFileListUI();
+        });
+      }
+
+      ragBrowseBtn.addEventListener('click', () => ragFileInput.click());
+      ragFileInput.addEventListener('change', () => {
+        ragAddFiles(ragFileInput.files);
+        ragFileInput.value = '';
+      });
+
+      ['dragenter', 'dragover'].forEach((evt) => {
+        ragDropZone.addEventListener(evt, (e) => {
+          e.preventDefault();
+          ragDropZone.classList.add('dragover');
+        });
+      });
+      ['dragleave', 'drop'].forEach((evt) => {
+        ragDropZone.addEventListener(evt, (e) => {
+          e.preventDefault();
+          ragDropZone.classList.remove('dragover');
+        });
+      });
+      ragDropZone.addEventListener('drop', (e) => {
+        if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) {
+          ragAddFiles(e.dataTransfer.files);
+        }
+      });
+
+      ragGenerateBtn.addEventListener('click', () => {
+        if (ragPendingFiles.length === 0) return;
+        ragGenerateBtn.disabled = true;
+        ragProgressEl.hidden = false;
+        ragProgressEl.innerHTML = '';
+        vscode.postMessage({
+          type: 'generateRagCorpus',
+          payload: { files: ragPendingFiles.map((f) => ({ fileName: f.fileName, content: f.content })) }
+        });
       });
 
       document.querySelectorAll('input[name="browserChannel"]').forEach((radio) => {
@@ -371,6 +667,27 @@ export class SettingsPanel implements vscode.Disposable {
           renderModels(message.payload);
           return;
         }
+        if (message.type === 'ragGenerationProgress') {
+          const p = message.payload;
+          ragAppendProgressLine(p.fileName, p.status, p.message);
+          return;
+        }
+        if (message.type === 'ragGenerationDone') {
+          const r = message.payload;
+          if (r.error) {
+            ragAppendProgressLine('', 'error', r.error);
+          } else {
+            ragAppendProgressLine('', 'done', 'Done — ' + r.succeeded + ' generated, ' + r.skipped + ' skipped, ' + r.failed + ' failed.');
+            // Only clear the queue on a real attempt (not the early-exit
+            // "Copilot isn't set up" error above) — a genuine failure per
+            // file already stays visible in the progress log for review,
+            // but the pending list itself is done with regardless.
+            ragPendingFiles = [];
+            ragUpdateFileListUI();
+          }
+          ragGenerateBtn.disabled = ragPendingFiles.length === 0;
+          return;
+        }
         if (message.type !== 'settings') {
           return;
         }
@@ -386,6 +703,7 @@ export class SettingsPanel implements vscode.Disposable {
         applyAutomationMode(settings.automationMode);
         languageSelect.value = settings.language;
         renderVersions(settings.language, settings.languageVersion);
+        ragEnabledToggle.checked = settings.ragEnabled;
 
         pendingModelId = settings.copilotModelId;
         copilotModelRow.classList.toggle('visible', settings.copilotEnabled);

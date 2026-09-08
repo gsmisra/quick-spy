@@ -27,6 +27,13 @@ export interface ObjectSpySettings {
   copilotEnabled: boolean;
   /** LanguageModelChat.id of the selected Copilot model, or '' if none picked yet. */
   copilotModelId: string;
+  /** "Reusable Components (RAG)" — when true, code-generation prompts are
+   * augmented with the best-matching entries from `.github/rag/*.md` (see
+   * rag/ragRetriever.ts). Safe to leave on with an empty/missing
+   * `.github/rag` folder — retrieval then simply finds nothing and adds
+   * zero prompt content, so this defaults to true rather than requiring an
+   * extra step once a team actually populates the folder. */
+  ragEnabled: boolean;
 }
 
 /**
@@ -46,7 +53,8 @@ const DEFAULTS: ObjectSpySettings = {
   browserChannel: 'chrome',
   automationMode: 'ui',
   copilotEnabled: false,
-  copilotModelId: ''
+  copilotModelId: '',
+  ragEnabled: true
 };
 
 const STORAGE_KEY = 'objectSpy.settings';
