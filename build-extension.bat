@@ -50,7 +50,12 @@ call npm run compile
 if errorlevel 1 goto :fail
 
 echo.
-echo [4/5] Running automated tests (Verify & Fix agent, security-critical path checks, ...)...
+rem A literal "&" in any echo'd text below would be parsed by cmd.exe as a
+rem command separator (e.g. "Verify & Fix" silently splits into two
+rem commands, the second one failing with "'Fix' is not recognized...") --
+rem spell it out ("and") rather than escaping ("^&"), so a future edit here
+rem doesn't reintroduce the same trap by typing a plain "&".
+echo [4/5] Running automated tests (Verify and Fix agent, security-critical path checks, ...)...
 call npm test
 if errorlevel 1 goto :fail
 

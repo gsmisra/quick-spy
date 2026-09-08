@@ -75,7 +75,7 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "pretest": "tsc -p tsconfig.test.json",
-    "test": "node --test \"out-test/test/**/*.test.js\"",
+    "test": "node scripts/run-tests.js",
     "package": "node node_modules/@vscode/vsce/vsce package"
   },
   "devDependencies": {
