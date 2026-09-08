@@ -230,14 +230,18 @@ export class FeatureFilePanel implements vscode.Disposable {
 
 /**
  * Renders one scenario's tags/name line, then every one of its own steps as
- * its own syntax-highlighted, individually checkable row (checked by
- * default — "By default all steps will be selected, but user can deselect
- * any step"), then its Examples table(s) if it's a Scenario Outline
- * (not individually selectable — an Outline's steps only make sense
- * together with the placeholders their Examples table fills in). Each
- * checkbox's `data-step` is that step's index into `scenario.steps`,
- * exactly what buildFilteredScenarioText() (gherkinParser.ts) expects back
- * from the 'select' message's `selectedStepIndices`.
+ * its own syntax-highlighted, individually checkable row — UNCHECKED by
+ * default, since nothing is selected until the user actually picks this
+ * Scenario/Scenario Outline via its radio button; the client script below
+ * then checks every one of THIS scenario's boxes the moment its radio is
+ * selected ("once the user selects a particular Scenario ... all its steps
+ * should automatically be selected"), and the user can deselect any of them
+ * from there — then its Examples table(s) if it's a Scenario Outline (not
+ * individually selectable — an Outline's steps only make sense together
+ * with the placeholders their Examples table fills in). Each checkbox's
+ * `data-step` is that step's index into `scenario.steps`, exactly what
+ * buildFilteredScenarioText() (gherkinParser.ts) expects back from the
+ * 'select' message's `selectedStepIndices`.
  */
 function renderScenarioBody(scenario: GherkinScenario, scenarioIndex: number): string {
   const headerLines: string[] = [];
@@ -251,7 +255,7 @@ function renderScenarioBody(scenario: GherkinScenario, scenarioIndex: number): s
     .map(
       (step, stepIndex) => `
       <label class="gk-step-row">
-        <input type="checkbox" class="gk-step-check" data-scenario="${scenarioIndex}" data-step="${stepIndex}" checked />
+        <input type="checkbox" class="gk-step-check" data-scenario="${scenarioIndex}" data-step="${stepIndex}" />
         <pre class="gk-step-line">${highlightGherkin(step.rawText)}</pre>
       </label>`
     )
@@ -467,6 +471,15 @@ function getHtml(feature: GherkinFeature, filePath: string): string {
       document.querySelectorAll('input[name="scenarioPick"]').forEach((radio) => {
         radio.addEventListener('change', () => {
           selectedIndex = Number(radio.value);
+          // Every step checkbox starts unchecked (see renderScenarioBody())
+          // — picking a Scenario/Scenario Outline is what selects all of
+          // ITS OWN steps by default; the user can still deselect any of
+          // them afterward, same as before. Re-picking the same scenario
+          // re-checks all its boxes too, giving a predictable "fresh full
+          // selection" every time a radio is (re)selected.
+          document.querySelectorAll('.gk-step-check[data-scenario="' + selectedIndex + '"]').forEach((checkbox) => {
+            checkbox.checked = true;
+          });
           updateUseButtonState();
         });
       });
