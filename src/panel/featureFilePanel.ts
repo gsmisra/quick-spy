@@ -476,9 +476,14 @@ function getHtml(feature: GherkinFeature, filePath: string): string {
           // ITS OWN steps by default; the user can still deselect any of
           // them afterward, same as before. Re-picking the same scenario
           // re-checks all its boxes too, giving a predictable "fresh full
-          // selection" every time a radio is (re)selected.
-          document.querySelectorAll('.gk-step-check[data-scenario="' + selectedIndex + '"]').forEach((checkbox) => {
-            checkbox.checked = true;
+          // selection" every time a radio is (re)selected. Only one
+          // scenario is ever "active" at a time, so every OTHER scenario's
+          // boxes are explicitly cleared here too — otherwise a scenario
+          // the user switched away from would be left with its previous
+          // selection still checked (invisible once its body is collapsed,
+          // but still real state) instead of reading as fully deselected.
+          document.querySelectorAll('.gk-step-check').forEach((checkbox) => {
+            checkbox.checked = Number(checkbox.getAttribute('data-scenario')) === selectedIndex;
           });
           updateUseButtonState();
         });
