@@ -42,7 +42,7 @@ export class GeneratedFeaturePanel implements vscode.Disposable {
       return;
     }
     this.panel = vscode.window.createWebviewPanel(
-      'softPlayGeneratedFeature',
+      'SoftPlayGeneratedFeature',
       'Generated Feature File',
       vscode.ViewColumn.Beside,
       {
@@ -109,7 +109,7 @@ export class GeneratedFeaturePanel implements vscode.Disposable {
         return;
       }
       await vscode.workspace.fs.writeFile(uri, Buffer.from(message.payload, 'utf8'));
-      void vscode.window.showInformationMessage(`softPlay: saved ${path.basename(uri.fsPath)}`);
+      void vscode.window.showInformationMessage(`SoftPlay: saved ${path.basename(uri.fsPath)}`);
     } else if (message.type === 'regenerate') {
       this.onRegenerate();
     }

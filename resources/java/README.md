@@ -38,12 +38,12 @@ Only needed when the dependency versions in `testExecutor.ts`'s
 changes. From a machine with normal internet access:
 
 ```bash
-mkdir -p /tmp/softplay-javaprep && cd /tmp/softplay-javaprep
+mkdir -p /tmp/SoftPlay-javaprep && cd /tmp/SoftPlay-javaprep
 cat > pom.xml <<'EOF'
 <project xmlns="http://maven.apache.org/POM/4.0.0">
   <modelVersion>4.0.0</modelVersion>
-  <groupId>com.softplay.runner</groupId>
-  <artifactId>softplay-runner</artifactId>
+  <groupId>com.SoftPlay.runner</groupId>
+  <artifactId>SoftPlay-runner</artifactId>
   <version>1.0.0</version>
   <properties>
     <maven.compiler.source>17</maven.compiler.source>

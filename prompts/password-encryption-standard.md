@@ -1,7 +1,7 @@
 # Mandatory Standard — Auto Password Encryption
 
 Every credential in this prompt that looks like `ENC[v1:...]` is **ciphertext**,
-not the real secret. softPlay encrypted it locally (AES-256-CTR + HMAC-SHA256,
+not the real secret. SoftPlay encrypted it locally (AES-256-CTR + HMAC-SHA256,
 Encrypt-then-MAC) before this prompt was ever built, specifically so no real
 password, token, or API key leaves the developer's machine. You cannot decrypt
 these tokens, and you must not try to guess, infer, reconstruct, or otherwise

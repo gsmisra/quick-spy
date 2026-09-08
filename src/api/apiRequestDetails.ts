@@ -24,7 +24,7 @@ export interface ApiFormDataRow extends ApiKeyValueRow {
   valueType: 'text' | 'file';
 }
 
-/** Every auth type softPlay's Control Panel offers — the same set Postman
+/** Every auth type SoftPlay's Control Panel offers — the same set Postman
  * itself offers minus "Inherit auth from parent" (no collection/folder
  * hierarchy exists here for anything to inherit from). */
 export type ApiAuthType = 'noauth' | 'apikey' | 'bearer' | 'basic' | 'digest' | 'oauth1' | 'oauth2' | 'hawk' | 'awsv4' | 'ntlm' | 'edgegrid';
@@ -127,7 +127,7 @@ function formatFormDataRows(rows: ApiFormDataRow[]): string {
  * Renders the API request as a plain-language summary for the LLM prompt —
  * never the literal secret VALUE of an API key/bearer token/basic-auth
  * password: every credential-shaped field goes through `encryptSecret`
- * first (softPlay's "Auto Password Encryption" — see security/secretVault.ts),
+ * first (SoftPlay's "Auto Password Encryption" — see security/secretVault.ts),
  * so what actually reaches the prompt is an opaque `ENC[v1:...]` token, not
  * the real value. This is stronger than the previous "just tell the LLM to
  * reference an env var" approach: the generated code comes back already
@@ -231,7 +231,7 @@ function authTypeLabel(type: ApiAuthType): string {
 
 /** One line per field of whichever auth type is actually selected — every
  * secret-shaped field (keys, secrets, tokens, passwords) is run through
- * softPlay's Auto Password Encryption (`encryptSecret`) and sent as an
+ * SoftPlay's Auto Password Encryption (`encryptSecret`) and sent as an
  * opaque `ENC[v1:...]` token, never the real value; everything else
  * (usernames, key NAMES, regions, algorithms, header prefixes) is plain,
  * non-secret metadata the LLM needs to generate the right shape of code and

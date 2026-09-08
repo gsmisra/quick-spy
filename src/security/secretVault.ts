@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as crypto from 'crypto';
 
 /**
- * softPlay's "Auto Password Encryption" — the local cryptographic core.
+ * SoftPlay's "Auto Password Encryption" — the local cryptographic core.
  *
  * Scope, deliberately: this protects NON-PRODUCTION test automation
  * credentials (a QA login account, a sandbox API token, ...) from ever
@@ -35,17 +35,17 @@ import * as crypto from 'crypto';
  * see `SECRET_ENV_VAR`.
  */
 
-const SECRET_STORAGE_KEY = 'softPlay.secretVault.masterKeyBase64';
+const SECRET_STORAGE_KEY = 'SoftPlay.secretVault.masterKeyBase64';
 
 /** The ONLY way the master key ever reaches the code that needs to decrypt
  * a credential — an environment variable, never a constant baked into the
  * generated file. `execution/testExecutor.ts` sets this automatically when
- * softPlay itself runs the code (Verify & Fix Code); a standalone CI/CD
+ * SoftPlay itself runs the code (Verify & Fix Code); a standalone CI/CD
  * pipeline running the same generated file later must supply it the same
  * way, sourced from whatever secrets manager that pipeline already uses
  * (HashiCorp Vault, CyberArk, Azure Key Vault, AWS Secrets Manager, ...) —
  * this extension deliberately doesn't prescribe which one. */
-export const SECRET_ENV_VAR = 'SOFTPLAY_SECRET_KEY';
+export const SECRET_ENV_VAR = 'SoftPlay_SECRET_KEY';
 
 const TOKEN_VERSION = 'v1';
 const TOKEN_PATTERN = /^ENC\[v1:([A-Za-z0-9+/=]+):([A-Za-z0-9+/=]+):([A-Za-z0-9+/=]+)\]$/;
@@ -59,8 +59,8 @@ export const TOKEN_MARKER = 'ENC[';
 // Fixed, public labels used only to derive two independent subkeys from one
 // master key via HMAC — not secret themselves (their whole purpose is
 // domain separation, not obscurity).
-const ENC_KEY_LABEL = 'softplay-aes-key-v1';
-const MAC_KEY_LABEL = 'softplay-hmac-key-v1';
+const ENC_KEY_LABEL = 'SoftPlay-aes-key-v1';
+const MAC_KEY_LABEL = 'SoftPlay-hmac-key-v1';
 
 // In-memory only — re-fetched from SecretStorage at most once per extension
 // host session, never written to disk by this module itself.
@@ -116,14 +116,14 @@ export async function decryptSecret(context: vscode.ExtensionContext, token: str
   const { encKey, macKey } = deriveSubKeys(masterKey);
   const match = TOKEN_PATTERN.exec(token.trim());
   if (!match) {
-    throw new Error('Not a softPlay encrypted token.');
+    throw new Error('Not a SoftPlay encrypted token.');
   }
   const iv = Buffer.from(match[1], 'base64');
   const tag = Buffer.from(match[2], 'base64');
   const ciphertext = Buffer.from(match[3], 'base64');
   const expectedTag = crypto.createHmac('sha256', macKey).update(Buffer.concat([iv, ciphertext])).digest();
   if (expectedTag.length !== tag.length || !crypto.timingSafeEqual(expectedTag, tag)) {
-    throw new Error('softPlay encrypted value failed its integrity check — token may be corrupted or tampered with.');
+    throw new Error('SoftPlay encrypted value failed its integrity check — token may be corrupted or tampered with.');
   }
   const decipher = crypto.createDecipheriv('aes-256-ctr', encKey, iv);
   return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8');

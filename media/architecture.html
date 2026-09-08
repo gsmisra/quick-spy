@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>softPlay — Architecture &amp; Technical Information</title>
+<title>SoftPlay — Architecture &amp; Technical Information</title>
 <style>
   :root {
     --td-green: #54b948;
@@ -279,7 +279,7 @@
 
 <nav class="topbar">
   <div class="wrap">
-    <span class="brand">softPlay</span>
+    <span class="brand">SoftPlay</span>
     <a href="#overview">Overview</a>
     <a href="#architecture">Architecture</a>
     <a href="#lifecycle">Request Lifecycle</a>
@@ -299,7 +299,7 @@
 <header class="hero">
   <div class="wrap">
     <span class="eyebrow">Architecture &amp; Technical Information</span>
-    <h1 class="headline">softPlay, end to end.</h1>
+    <h1 class="headline">TD Securities Agentic Test Automation</h1>
     <p class="subhead">
       A single reference for how this VS Code extension is built, how it caches data locally, how it talks to the
       GitHub Copilot LLM, and how to use every button on screen — from architect deep-dive to first-time click-through.
@@ -320,13 +320,13 @@
   <div class="wrap">
     <div class="section-head">
       <h2>Executive Summary</h2>
-      <p>What softPlay is, in five sentences a software architect can act on.</p>
+      <p>What SoftPlay is, in five sentences a software architect can act on.</p>
     </div>
     <ul class="exec-list">
-      <li><span class="num">1</span><span class="desc"><b>softPlay is a VS Code extension</b> that records browser flows with Playwright Codegen, or a manually-built REST request, and turns either into production-style test code using GitHub Copilot's LLM.</span></li>
+      <li><span class="num">1</span><span class="desc"><b>SoftPlay is a VS Code extension</b> that records browser flows with Playwright Codegen, or a manually-built REST request, and turns either into production-style test code using GitHub Copilot's LLM.</span></li>
       <li><span class="num">2</span><span class="desc"><b>Two automation modes, one pipeline:</b> UI Automation (Playwright, browser-driven) and API Automation (REST Assured / requests, no browser) share the same settings, caching, and LLM plumbing.</span></li>
       <li><span class="num">3</span><span class="desc"><b>Nothing runs in the cloud except the LLM call itself.</b> Browser recording, code execution, environment checks, and all caching happen as local child processes / in-process memory on the developer's machine — a deliberate fit for bank/enterprise networks with restricted egress.</span></li>
-      <li><span class="num">4</span><span class="desc"><b>The LLM is never bundled or self-hosted.</b> softPlay borrows the user's own GitHub Copilot Chat subscription via VS Code's standard <code>vscode.lm</code> API — no API keys stored, no separate billing relationship.</span></li>
+      <li><span class="num">4</span><span class="desc"><b>The LLM is never bundled or self-hosted.</b> SoftPlay borrows the user's own GitHub Copilot Chat subscription via VS Code's standard <code>vscode.lm</code> API — no API keys stored, no separate billing relationship.</span></li>
       <li><span class="num">5</span><span class="desc"><b>Caching is intentionally simple:</b> three in-memory, TTL-bound caches (no Redis, no disk database) cut down repeated process spawns and repeated LLM token-counting calls, without ever risking a stale answer for something that matters.</span></li>
       <li><span class="num">6</span><span class="desc"><b>Every credential is encrypted by default</b> — in both modes, with no setting to turn it off. See "Auto Password Encryption" in Components.</span></li>
       <li><span class="num">7</span><span class="desc"><b>"Verify & Fix Code" is a real LangChain tool-calling agent</b> — not a hardcoded retry loop. It runs the code itself, reads whatever context it decides it needs, and only stops on a machine-verified pass — see "Verify & Fix Agent" below.</span></li>
@@ -432,7 +432,7 @@
         <div class="tstep">
           <span class="dot"></span><span class="lane vscode">VS Code LM API</span>
           <h4>5. <code>vscode.lm</code> hands off to GitHub Copilot Chat</h4>
-          <p>The installed Copilot Chat extension owns authentication and the actual network call — softPlay never sees a token or API key.</p>
+          <p>The installed Copilot Chat extension owns authentication and the actual network call — SoftPlay never sees a token or API key.</p>
         </div>
         <div class="tstep">
           <span class="dot"></span><span class="lane cloud">Copilot Cloud</span>
@@ -523,7 +523,7 @@
   <div class="wrap">
     <div class="section-head">
       <h2>LLM Integration Details</h2>
-      <p>softPlay never talks to an LLM provider directly. It exclusively uses VS Code's built-in Language Model API, which in turn is served by whichever GitHub Copilot Chat models the user's own subscription exposes.</p>
+      <p>SoftPlay never talks to an LLM provider directly. It exclusively uses VS Code's built-in Language Model API, which in turn is served by whichever GitHub Copilot Chat models the user's own subscription exposes.</p>
     </div>
 
     <div class="grid cols-2">
@@ -551,7 +551,7 @@
 
     <div class="callout" style="margin-top:24px;">
       <span class="emoji">🔐</span>
-      <span>VS Code shows its own one-time consent dialog the first time any extension calls the Language Model API in a session — softPlay does not, and cannot, bypass that gate.</span>
+      <span>VS Code shows its own one-time consent dialog the first time any extension calls the Language Model API in a session — SoftPlay does not, and cannot, bypass that gate.</span>
     </div>
   </div>
 </section>
@@ -569,7 +569,7 @@
       <span class="tag">Executive summary</span>
       <h3 style="font-size:19px;">The AI now tests its own work instead of guessing blind</h3>
       <p>
-        Before: softPlay ran the code once, and on failure, sent the error to Copilot for a single guess at a fix —
+        Before: SoftPlay ran the code once, and on failure, sent the error to Copilot for a single guess at a fix —
         repeated up to 5 times, hoping each guess was better than the last. Now: a real autonomous agent, built on
         <b>LangChain</b> (the industry-standard framework for tool-using AI agents), is handed three tools — run the
         code, read a file, read the linked test scenario — and it decides for itself, turn by turn, whether it has
@@ -655,7 +655,7 @@
     <div class="grid cols-2">
       <div class="card tight">
         <span class="tag">🛟 Automatic fallback</span>
-        <p>If the agent path fails for any reason unrelated to the code itself (e.g. Copilot temporarily unavailable), softPlay automatically falls back to the exact, original, previously-shipped fix loop — kept in the codebase verbatim as <code>runLegacyVerifyFixLoop()</code> — so this rewrite can never leave "Verify &amp; Fix Code" more broken than before it existed.</p>
+        <p>If the agent path fails for any reason unrelated to the code itself (e.g. Copilot temporarily unavailable), SoftPlay automatically falls back to the exact, original, previously-shipped fix loop — kept in the codebase verbatim as <code>runLegacyVerifyFixLoop()</code> — so this rewrite can never leave "Verify &amp; Fix Code" more broken than before it existed.</p>
       </div>
       <div class="card tight">
         <span class="tag">🔒 Sandboxed file access</span>
@@ -746,7 +746,7 @@
       <p>
         Any password typed into a recorded browser flow, or entered into <b>any</b> of the API Automation
         Authorization tab's auth types (API Key, Bearer, Basic, Digest, OAuth 1.0/2.0, Hawk, AWS Signature, NTLM,
-        Akamai EdgeGrid), is encrypted locally the instant softPlay touches it — before it is ever included in a
+        Akamai EdgeGrid), is encrypted locally the instant SoftPlay touches it — before it is ever included in a
         Copilot prompt, and before it is written into the saved AI Generated Code file. There is no setting to turn
         this off: it is the standard behavior for both automation modes. A matching decrypt call — plus, for Python,
         a small bundled pure-Python AES implementation, so no <code>pip install</code> is ever required — is added
@@ -767,7 +767,7 @@
         </div>
         <div class="card tight">
           <span class="tag">Runtime key delivery</span>
-          <p><code>SOFTPLAY_SECRET_KEY</code> environment variable — set automatically for "Verify &amp; Fix Code"; a real CI/CD pipeline supplies it from its own secrets manager (Vault, CyberArk, Azure Key Vault, ...) instead.</p>
+          <p><code>SoftPlay_SECRET_KEY</code> environment variable — set automatically for "Verify &amp; Fix Code"; a real CI/CD pipeline supplies it from its own secrets manager (Vault, CyberArk, Azure Key Vault, ...) instead.</p>
         </div>
       </div>
 
@@ -785,7 +785,7 @@
         </div>
         <div class="arrow-down">▼</div>
         <div class="row">
-          <div class="node engine"><b>Decrypt helper (bundled, verbatim)</b><span>resolves the real value at test-run time via SOFTPLAY_SECRET_KEY</span></div>
+          <div class="node engine"><b>Decrypt helper (bundled, verbatim)</b><span>resolves the real value at test-run time via SoftPlay_SECRET_KEY</span></div>
         </div>
       </div>
       <p class="muted" style="margin-top:14px;">
@@ -929,7 +929,7 @@
       <div class="fnlist">
         <div class="fn"><span class="sig">encryptSecret() / decryptSecret()</span><span class="desc">AES-256-CTR + HMAC-SHA256 encrypt/decrypt against the ENC[v1:...] token format.</span></div>
         <div class="fn"><span class="sig">getOrCreateMasterKey()</span><span class="desc">Lazily generates (once) and reads the per-install 32-byte key from VS Code's SecretStorage.</span></div>
-        <div class="fn"><span class="sig">getSecretEnv()</span><span class="desc">Base64 key packaged as SOFTPLAY_SECRET_KEY, injected into the child process running "Verify &amp; Fix Code".</span></div>
+        <div class="fn"><span class="sig">getSecretEnv()</span><span class="desc">Base64 key packaged as SoftPlay_SECRET_KEY, injected into the child process running "Verify &amp; Fix Code".</span></div>
         <div class="fn"><span class="sig">looksLikeSecretField()</span><span class="desc">Heuristic match (password/pwd/secret/token/pin/api-key/...) used to find credential-shaped fields.</span></div>
         <div class="fn"><span class="sig">encryptPasswordLiteralsInCode()</span><span class="desc">Scans recorded UI code line-by-line and replaces a password-shaped .fill()/.type() literal with a decrypt() call over an encrypted token.</span></div>
       </div>
@@ -966,7 +966,7 @@
 <section class="guide">
   <div class="wrap" style="text-align:center;">
     <span class="eyebrow">Now in plain English</span>
-    <h2 style="font-size:32px;margin:6px 0 10px;">Using softPlay — no experience needed</h2>
+    <h2 style="font-size:32px;margin:6px 0 10px;">Using SoftPlay — no experience needed</h2>
     <p class="subhead" style="margin:0 auto;">Follow the pictures below in order. That's really it.</p>
   </div>
 </section>
@@ -982,8 +982,8 @@
       <div class="step-card">
         <span class="step-num">1</span>
         <div class="emoji">🧩</div>
-        <h4>Open softPlay</h4>
-        <p>Click the softPlay icon in the Activity Bar on the left edge of VS Code.</p>
+        <h4>Open SoftPlay</h4>
+        <p>Click the SoftPlay icon in the Activity Bar on the left edge of VS Code.</p>
       </div>
       <div class="step-card">
         <span class="step-num">2</span>
@@ -1001,7 +1001,7 @@
         <span class="step-num">4</span>
         <div class="emoji">▶️</div>
         <h4>Click Start</h4>
-        <p>A real browser window opens. softPlay is now watching everything you do.</p>
+        <p>A real browser window opens. SoftPlay is now watching everything you do.</p>
       </div>
       <div class="step-card">
         <span class="step-num">5</span>
@@ -1037,7 +1037,7 @@
         <span class="step-num">10</span>
         <div class="emoji">✅</div>
         <h4>Click "Verify &amp; Fix Code"</h4>
-        <p>softPlay actually runs the code for you. If it fails, the AI automatically tries to fix it.</p>
+        <p>SoftPlay actually runs the code for you. If it fails, the AI automatically tries to fix it.</p>
       </div>
       <div class="step-card">
         <span class="step-num">11</span>
@@ -1101,7 +1101,7 @@
         <span class="step-num">7</span>
         <div class="emoji">🤖</div>
         <h4>Click "Start AI Code Generation"</h4>
-        <p>softPlay writes a full REST Assured (Java) or requests (Python) test based on your request.</p>
+        <p>SoftPlay writes a full REST Assured (Java) or requests (Python) test based on your request.</p>
       </div>
       <div class="step-card">
         <span class="step-num">8</span>
@@ -1179,7 +1179,7 @@
       </div>
       <div class="card tight">
         <h3>Nothing happens when I click Start</h3>
-        <p>Check the "softPlay" Output channel (View → Output, then pick softPlay from the dropdown) for the exact error.</p>
+        <p>Check the "SoftPlay" Output channel (View → Output, then pick SoftPlay from the dropdown) for the exact error.</p>
       </div>
       <div class="card tight">
         <h3>My generated code seems out of date</h3>
@@ -1191,7 +1191,7 @@
 
 <footer>
   <div class="wrap">
-    <p><span class="td">softPlay</span> — Architecture &amp; Technical Information. Generated locally; opens as a static, offline page with no external dependencies.</p>
+    <p><span class="td">SoftPlay</span> — Architecture &amp; Technical Information. Generated locally; opens as a static, offline page with no external dependencies.</p>
     <p class="muted">Close this browser tab to return to VS Code.</p>
   </div>
 </footer>

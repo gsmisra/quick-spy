@@ -51,7 +51,7 @@ type PanelStatus =
 export const OBJECT_SPY_VIEW_ID = 'objectSpy.mainView';
 
 /**
- * Owns softPlay's main UI and bridges it to CodegenManager.
+ * Owns SoftPlay's main UI and bridges it to CodegenManager.
  *
  * Lives in the Activity Bar as a sidebar view (vscode.WebviewViewProvider),
  * not a floating editor-tab panel — so it's always one click away, the way
@@ -172,7 +172,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
   // VS Code Output channel rather than a panel of their own — frees up the
   // sidebar for the code editors, and is the idiomatic place for this kind
   // of log anyway.
-  private readonly outputChannel = vscode.window.createOutputChannel('softPlay');
+  private readonly outputChannel = vscode.window.createOutputChannel('SoftPlay');
 
   constructor(private readonly context: vscode.ExtensionContext, private readonly settingsStore: SettingsStore) {
     this.settingsPanel = new SettingsPanel(context, settingsStore);
@@ -214,7 +214,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
     );
   }
 
-  /** Brings the sidebar view into focus — e.g. from the "softPlay: Open Panel" command. */
+  /** Brings the sidebar view into focus — e.g. from the "SoftPlay: Open Panel" command. */
   show(): void {
     void vscode.commands.executeCommand(`${OBJECT_SPY_VIEW_ID}.focus`);
   }
@@ -252,7 +252,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
   }
 
   /** `url` is Playwright `codegen`'s own positional CLI argument, needed at
-   * spawn time — the Command Palette's "softPlay: Start Browser" command
+   * spawn time — the Command Palette's "SoftPlay: Start Browser" command
    * has no URL to offer, so it's optional; codegen simply opens blank and
    * the user types into its own address bar, same as running it by hand
    * with no URL. */
@@ -583,7 +583,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
       return;
     }
     await vscode.workspace.fs.writeFile(uri, Buffer.from(code, 'utf8'));
-    void vscode.window.showInformationMessage(`softPlay: saved ${path.basename(uri.fsPath)}`);
+    void vscode.window.showInformationMessage(`SoftPlay: saved ${path.basename(uri.fsPath)}`);
   }
 
   /** "Kill All Browsers" (UI Automation) — stops every Playwright browser
@@ -817,7 +817,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
       );
       if (!env.ok) {
         this.aiCodePanel.setVerifyStatus(env.message, 'error');
-        void vscode.window.showErrorMessage(`softPlay: ${env.message}`);
+        void vscode.window.showErrorMessage(`SoftPlay: ${env.message}`);
         return;
       }
       // `env` already ran the Python check above (env & package
@@ -1008,7 +1008,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
           if (apiCallOutcome === 'failed') {
             this.aiCodePanel.setVerifyStatus(
               'Code Correctness Confirmed — no syntax errors. The live API call itself returned an error response ' +
-                '(see the softPlay Output channel) — recheck the endpoint URL/credentials and try again in your own IDE/test package.',
+                '(see the SoftPlay Output channel) — recheck the endpoint URL/credentials and try again in your own IDE/test package.',
               'success'
             );
           } else {
@@ -1023,7 +1023,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
       }
       case 'declined':
         this.aiCodePanel.setVerifyStatus(
-          `${result.summary}${lastKnownError ? ` Last error: ${truncateForStatusLine(lastKnownError)}` : ''} Current code's errors are shown in the softPlay Output channel for manual fixing.`,
+          `${result.summary}${lastKnownError ? ` Last error: ${truncateForStatusLine(lastKnownError)}` : ''} Current code's errors are shown in the SoftPlay Output channel for manual fixing.`,
           'error'
         );
         return;
@@ -1105,7 +1105,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
       );
       if (choice !== 'Yes') {
         this.aiCodePanel.setVerifyStatus(
-          `Stopped before attempt ${attempt} — current code's errors are shown in the softPlay Output channel for manual fixing.`,
+          `Stopped before attempt ${attempt} — current code's errors are shown in the SoftPlay Output channel for manual fixing.`,
           'error'
         );
         return;
@@ -1120,7 +1120,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
         pythonCommand,
         settings.automationMode,
         this.context.extensionUri.fsPath,
-        // SOFTPLAY_SECRET_KEY — lets the generated code's own
+        // SoftPlay_SECRET_KEY — lets the generated code's own
         // SecretVault.decrypt()/decrypt_secret() call actually resolve a
         // credential Auto Password Encryption encrypted (see
         // security/secretVault.ts). Harmless to always pass: unused by
@@ -1143,7 +1143,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
           if (result.apiCallOutcome === 'failed') {
             this.aiCodePanel.setVerifyStatus(
               'Code Correctness Confirmed — no syntax errors. The live API call itself returned an error response ' +
-                '(see the softPlay Output channel) — recheck the endpoint URL/credentials and try again in your own IDE/test package.',
+                '(see the SoftPlay Output channel) — recheck the endpoint URL/credentials and try again in your own IDE/test package.',
               'success'
             );
           } else {
@@ -1162,7 +1162,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
       if (attempt === ObjectSpyPanel.MAX_VERIFY_ATTEMPTS) {
         this.aiCodePanel.setVerifyStatus(
           `Still failing after ${ObjectSpyPanel.MAX_VERIFY_ATTEMPTS} attempts: ${truncateForStatusLine(result.output)} ` +
-            `(full output in the softPlay Output channel — fix manually, or click Verify & Fix Code again).`,
+            `(full output in the SoftPlay Output channel — fix manually, or click Verify & Fix Code again).`,
           'error'
         );
         return;
@@ -1325,8 +1325,8 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
           this.currentSuggestedBaseName()
         );
     // Diagnostic trail for exactly the question "was X actually sent, and
-    // did a response come back?" — check the softPlay Output channel
-    // (View -> Output -> softPlay) rather than needing to guess from a
+    // did a response come back?" — check the SoftPlay Output channel
+    // (View -> Output -> SoftPlay) rather than needing to guess from a
     // stuck "(generating…)" label with no other visible signal.
     if (encryptedCount > 0) {
       this.outputChannel.appendLine(`Auto Password Encryption: encrypted ${encryptedCount} credential value(s) before sending to Copilot.`);
@@ -1438,7 +1438,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
   /** Bound `SecretEncryptor` (see api/apiRequestDetails.ts) for this panel's
    * own `context` — API Automation mode's every prompt-building call site
    * passes this in so credential-shaped auth fields get encrypted
-   * (softPlay's "Auto Password Encryption") rather than sent in plaintext. */
+   * (SoftPlay's "Auto Password Encryption") rather than sent in plaintext. */
   private getEncryptSecret(): SecretEncryptor {
     return (plaintext: string) => secretVault.encryptSecret(this.context, plaintext);
   }
@@ -1952,7 +1952,7 @@ function buildFeatureFilePrompt(builtInInstructions: string, playwrightCode: str
   );
   if (playwrightCode.includes(secretVault.TOKEN_MARKER)) {
     parts.push(
-      `\n## Note on \`ENC[v1:...]\` tokens above\nThese are softPlay Auto Password Encryption tokens — encrypted ` +
+      `\n## Note on \`ENC[v1:...]\` tokens above\nThese are SoftPlay Auto Password Encryption tokens — encrypted ` +
         `credentials, not real values. Describe the underlying action in plain business terms only (e.g. "the user ` +
         `enters their password") — never reproduce, quote, or attempt to decode the token itself in the feature file.`
     );
@@ -1965,7 +1965,7 @@ function buildFeatureFilePrompt(builtInInstructions: string, playwrightCode: str
   if (customInstructions) {
     parts.push(
       `\n## ⚠ Additional instructions from the user — read this last and apply it\nThe user typed the following ` +
-        `into softPlay's chat box specifically for this request. Treat it as a real, binding requirement, not a ` +
+        `into SoftPlay's chat box specifically for this request. Treat it as a real, binding requirement, not a ` +
         `suggestion — if it conflicts with something more generic stated earlier in this prompt, this wins:\n${customInstructions}`
     );
   }
@@ -2057,7 +2057,7 @@ async function buildApiFeatureFilePrompt(
   if (customInstructions) {
     parts.push(
       `\n## ⚠ Additional instructions from the user — read this last and apply it\nThe user typed the following ` +
-        `into softPlay's chat box specifically for this request. Treat it as a real, binding requirement, not a ` +
+        `into SoftPlay's chat box specifically for this request. Treat it as a real, binding requirement, not a ` +
         `suggestion — if it conflicts with something more generic stated earlier in this prompt, this wins:\n${customInstructions}`
     );
   }
@@ -2161,7 +2161,7 @@ async function buildApiLlmPrompt(
   if (customInstructions) {
     parts.push(
       `\n## ⚠ Additional instructions from the user — read this last and apply it\nThe user typed the following ` +
-        `into softPlay's chat box specifically for this request. Treat it as a real, binding requirement, not a ` +
+        `into SoftPlay's chat box specifically for this request. Treat it as a real, binding requirement, not a ` +
         `suggestion — if it conflicts with something more generic stated earlier in this prompt, this wins:\n${customInstructions}`
     );
   }
@@ -2253,7 +2253,7 @@ const MAX_DIALOG_ERROR_CHARS = 800;
 function truncateForDialog(output: string): string {
   const trimmed = output.trim();
   const body = trimmed.length > MAX_DIALOG_ERROR_CHARS ? `…${trimmed.slice(-MAX_DIALOG_ERROR_CHARS)}` : trimmed;
-  return `${body}\n\n(Full output is in the softPlay Output channel.)`;
+  return `${body}\n\n(Full output is in the SoftPlay Output channel.)`;
 }
 
 /** Same idea as `truncateForDialog()` but for the AI Generated Code panel's
@@ -2388,7 +2388,7 @@ function buildLlmPrompt(
   if (!isPartialSelection) {
     parts.push(
       `\n## Browser executable requirement (non-negotiable)\n` +
-        `The user selected **${browserChannel === 'edge' ? 'Microsoft Edge' : 'Google Chrome'}** in softPlay ` +
+        `The user selected **${browserChannel === 'edge' ? 'Microsoft Edge' : 'Google Chrome'}** in SoftPlay ` +
         `Settings. A Chromium/Firefox/WebKit download is blocked by company policy in this environment, so the ` +
         `output must launch the real, already-installed ${browserChannel === 'edge' ? 'Edge' : 'Chrome'} executable ` +
         `on the local machine — found on disk by \`executablePath\` (never by \`channel\`, which still depends on ` +
@@ -2504,7 +2504,7 @@ function buildLlmPrompt(
   if (customInstructions) {
     parts.push(
       `\n## ⚠ Additional instructions from the user — read this last and apply it\nThe user typed the following ` +
-        `into softPlay's chat box specifically for this request. Treat it as a real, binding requirement, not a ` +
+        `into SoftPlay's chat box specifically for this request. Treat it as a real, binding requirement, not a ` +
         `suggestion — if it conflicts with something more generic stated earlier in this prompt, this wins:\n${customInstructions}`
     );
   }

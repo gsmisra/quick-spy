@@ -1,4 +1,4 @@
-# softPlay
+# SoftPlay
 
 A VS Code extension that puts Playwright's own real `codegen` tool one click
 away in the Activity Bar, links what it records to a Cucumber Gherkin
@@ -165,7 +165,7 @@ anywhere without that already being turned on.
 ## Custom md files (GitHub Copilot AI Assist)
 
 Requires the **GitHub Copilot Chat** extension installed and signed in.
-softPlay never bundles or hardcodes a model list — it asks VS Code's
+SoftPlay never bundles or hardcodes a model list — it asks VS Code's
 Language Model API (`vscode.lm.selectChatModels`) what's actually available
 at the moment you enable this, so whatever models your Copilot
 subscription/extension version exposes are what show up.
@@ -219,7 +219,7 @@ subscription/extension version exposes are what show up.
 
 **Consent:** the first time any extension calls the Language Model API in a
 session, VS Code shows a one-time permission dialog — that's Copilot's own
-gate, not something softPlay controls. This can be triggered either by the
+gate, not something SoftPlay controls. This can be triggered either by the
 chat composer's manual send or by the automatic post-recording refinement —
 either way, it only ever runs at all while you've explicitly turned on
 **Link with GitHub Copilot LLM** and picked a model in Settings, which is
@@ -235,7 +235,7 @@ confirms on the second, within 3 seconds).
 ## Settings
 
 Click the ⚙ button at the top of the panel (enabled any time) to open the
-**softPlay: Settings** panel:
+**SoftPlay: Settings** panel:
 
 | Setting | Options | Default |
 | --- | --- | --- |
@@ -285,15 +285,15 @@ from VSIX...** command.
 
 ## Using it
 
-softPlay's main UI lives in the **Activity Bar** — the vertical icon rail on
+SoftPlay's main UI lives in the **Activity Bar** — the vertical icon rail on
 the far left/right edge of the VS Code window (same place as Explorer,
 Search, Extensions) — not a floating editor tab, so it's always one click
-away. Look for the softPlay icon and click it to open the sidebar panel.
+away. Look for the SoftPlay icon and click it to open the sidebar panel.
 
 > **Just installed and don't see the icon?** Reload the window
 > (**Developer: Reload Window** in the Command Palette, or just close and
 > reopen VS Code). You can also always reach it via the Command Palette:
-> run **"softPlay: Open Panel"**.
+> run **"SoftPlay: Open Panel"**.
 
 ## Layout
 
@@ -312,8 +312,8 @@ full-size panel beside the sidebar (like **Settings**) rather than sharing
 sidebar space — see "Custom md files" above.
 
 Diagnostic/informational messages (codegen launch progress, feature-file
-linking) go to a dedicated **softPlay** Output channel — **View → Output**,
-then pick "softPlay" from the dropdown — rather than a panel inside the
+linking) go to a dedicated **SoftPlay** Output channel — **View → Output**,
+then pick "SoftPlay" from the dropdown — rather than a panel inside the
 sidebar. Actual errors still show as VS Code notifications.
 
 ## Project layout

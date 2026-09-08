@@ -1,4 +1,4 @@
-// softPlay — lightweight, dependency-free syntax highlighter for the
+// SoftPlay — lightweight, dependency-free syntax highlighter for the
 // Generated Code editor. Not a full parser: a single-pass regex tokenizer
 // good enough to color keywords, strings, comments, numbers, annotations/
 // decorators, and method/class-name identifiers close to VS Code's Dark+
@@ -160,5 +160,5 @@
     return out;
   }
 
-  global.softPlayHighlight = highlight;
+  global.SoftPlayHighlight = highlight;
 })(window);

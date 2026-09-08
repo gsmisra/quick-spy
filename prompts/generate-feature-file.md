@@ -691,7 +691,7 @@ Every scenario must:
 
 ---
 
-# SCOPE DISCIPLINE (softPlay-specific)
+# SCOPE DISCIPLINE (SoftPlay-specific)
 
 The Playwright Codegen output you are given is the ONLY source of truth for
 what the application actually does — you have no other access to the

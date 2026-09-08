@@ -47,7 +47,7 @@ function run(
     // caller that doesn't pass extraEnv; only "Verify & Fix Code" passes it
     // (see executeGeneratedCode()'s secretEnv param), to hand the AI
     // generated code's own SecretVault.decrypt()/decrypt_secret() calls the
-    // SOFTPLAY_SECRET_KEY they need (see security/secretVault.ts).
+    // SoftPlay_SECRET_KEY they need (see security/secretVault.ts).
     const env = extraEnv ? { ...process.env, ...extraEnv } : undefined;
     execFile(command, args, { cwd, windowsHide: true, timeout: 180_000, maxBuffer: 20 * 1024 * 1024, shell, env }, (error, stdout, stderr) => {
       const output = `${stdout || ''}${stderr || ''}`.trim();
@@ -97,7 +97,7 @@ export async function executeGeneratedCode(
   pythonCommand: string,
   automationMode: AutomationMode,
   resourcesRoot?: string,
-  /** SOFTPLAY_SECRET_KEY (see security/secretVault.ts), handed to the child
+  /** SoftPlay_SECRET_KEY (see security/secretVault.ts), handed to the child
    * process's environment so the generated code's own SecretVault.decrypt()
    * / decrypt_secret() call — present whenever "Auto Password Encryption"
    * encrypted at least one credential into the code — can actually resolve
@@ -206,8 +206,8 @@ function javaPomXml(bdd: boolean, automationMode: AutomationMode, resourcesRoot:
     : '';
   return `<project xmlns="http://maven.apache.org/POM/4.0.0">
   <modelVersion>4.0.0</modelVersion>
-  <groupId>com.softplay.runner</groupId>
-  <artifactId>softplay-runner</artifactId>
+  <groupId>com.SoftPlay.runner</groupId>
+  <artifactId>SoftPlay-runner</artifactId>
   <version>1.0.0</version>
   <properties>
     <maven.compiler.source>17</maven.compiler.source>

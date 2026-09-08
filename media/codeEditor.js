@@ -38,7 +38,7 @@
     }
 
     function render() {
-      codeEl.innerHTML = window.softPlayHighlight(textarea.value, language);
+      codeEl.innerHTML = window.SoftPlayHighlight(textarea.value, language);
       renderGutter();
     }
 

@@ -72,7 +72,7 @@ export class AiCodePanel implements vscode.Disposable {
       return;
     }
     this.panel = vscode.window.createWebviewPanel(
-      'softPlayAiCode',
+      'SoftPlayAiCode',
       'AI Generated Code',
       vscode.ViewColumn.Beside,
       {
@@ -219,7 +219,7 @@ export class AiCodePanel implements vscode.Disposable {
         return;
       }
       await vscode.workspace.fs.writeFile(uri, Buffer.from(message.payload, 'utf8'));
-      void vscode.window.showInformationMessage(`softPlay: saved ${path.basename(uri.fsPath)}`);
+      void vscode.window.showInformationMessage(`SoftPlay: saved ${path.basename(uri.fsPath)}`);
     } else if (message.type === 'regenerate') {
       this.onRegenerate();
     }

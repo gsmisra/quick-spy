@@ -7,7 +7,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const panelManager = new ObjectSpyPanel(context, settingsStore);
 
   context.subscriptions.push(
-    // Registers softPlay's main UI as an Activity Bar sidebar view (see
+    // Registers SoftPlay's main UI as an Activity Bar sidebar view (see
     // package.json's viewsContainers/views) rather than only a floating
     // editor-tab panel reachable via the Command Palette.
     vscode.window.registerWebviewViewProvider(OBJECT_SPY_VIEW_ID, panelManager, {

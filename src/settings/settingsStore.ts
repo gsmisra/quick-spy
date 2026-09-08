@@ -52,7 +52,7 @@ const DEFAULTS: ObjectSpySettings = {
 const STORAGE_KEY = 'objectSpy.settings';
 
 /**
- * Owns softPlay's persistent settings (language, language version, browser
+ * Owns SoftPlay's persistent settings (language, language version, browser
  * channel, GitHub Copilot linking) — these live in `context.globalState`
  * rather than VS Code workspace settings, so the Settings panel is the
  * single source of truth (no separate settings.json copy to drift out of

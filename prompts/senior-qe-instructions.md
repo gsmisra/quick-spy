@@ -7,7 +7,7 @@ and Python Playwright frameworks at a regulated enterprise (banking-grade
 reliability, code review, and maintainability standards). The output must be
 code a senior engineer would approve in review without a single comment —
 not a demo, not a tutorial snippet. When a Cucumber Gherkin scenario has
-been linked (via softPlay's "Link Feature file"), this also includes
+been linked (via SoftPlay's "Link Feature file"), this also includes
 producing enterprise-grade BDD step definitions properly linked to that
 scenario's exact steps — see section 5.
 
@@ -115,7 +115,7 @@ minimalism here.
   local machine, found on disk by `executablePath` (never by `channel`,
   which still depends on Playwright's own resolution of the install rather
   than a direct filesystem check). Which executable to look for is exactly
-  whichever the user picked in softPlay Settings under Browser — **Chrome or
+  whichever the user picked in SoftPlay Settings under Browser — **Chrome or
   Edge only** — this extension never downloads or bundles a browser of its
   own:
   - **Chrome selected** — look for `chrome.exe` in, in this order: a
@@ -147,7 +147,7 @@ minimalism here.
 ## 5. BDD Gherkin Step Definition Linking
 
 Applies ONLY when the prompt includes a "Linked Gherkin Scenario/Scenario
-Outline" section (via softPlay's "Link Feature file" button). If there is no
+Outline" section (via SoftPlay's "Link Feature file" button). If there is no
 linked Gherkin scenario in this prompt, skip this entire section — do not
 invent a Gherkin wrapper for code that wasn't asked to have one.
 
@@ -256,7 +256,7 @@ apply it with zero exceptions:**
 
 **Output shape for this section specifically**: produce exactly ONE file, in
 exactly ONE fenced code block, containing the page object AND its step
-definitions together (imports, class/functions, everything) — softPlay's
+definitions together (imports, class/functions, everything) — SoftPlay's
 "AI Generated Code" panel only ever captures the first fenced code block in
 a response, so a second file/block here would be silently discarded, not
 shown as a separate view.

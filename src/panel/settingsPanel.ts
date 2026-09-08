@@ -33,7 +33,7 @@ export class SettingsPanel implements vscode.Disposable {
 
     this.panel = vscode.window.createWebviewPanel(
       'objectSpySettings',
-      'softPlay: Settings',
+      'SoftPlay: Settings',
       vscode.ViewColumn.Beside,
       { enableScripts: true, retainContextWhenHidden: true }
     );
@@ -91,7 +91,7 @@ export class SettingsPanel implements vscode.Disposable {
       await vscode.env.openExternal(docPath);
     } catch (err) {
       void vscode.window.showErrorMessage(
-        `softPlay: Could not open the Architecture & Technical Information page (${docPath.fsPath}): ${
+        `SoftPlay: Could not open the Architecture & Technical Information page (${docPath.fsPath}): ${
           err instanceof Error ? err.message : String(err)
         }`
       );
@@ -114,7 +114,7 @@ export class SettingsPanel implements vscode.Disposable {
   <meta charset="UTF-8" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>softPlay Settings</title>
+  <title>SoftPlay Settings</title>
   <style>
     :root {
       /* TD Bank's own brand green — same fixed (non-theme-derived) color
@@ -253,7 +253,7 @@ export class SettingsPanel implements vscode.Disposable {
 
   <h2>AI Assist</h2>
   <p class="note" style="margin-top: 0;">
-    The "Link with GitHub Copilot LLM" switch now lives in the Control Panel (softPlay's main sidebar view) — turn it
+    The "Link with GitHub Copilot LLM" switch now lives in the Control Panel (SoftPlay's main sidebar view) — turn it
     on there first. Once it's on, pick which model to use below.
   </p>
   <div class="field" id="copilotModelRow">

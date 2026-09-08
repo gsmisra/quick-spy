@@ -82,7 +82,7 @@ export class CodegenManager implements vscode.Disposable {
     const target = language === 'java' ? 'java-junit' : 'python-pytest';
     const channel = browserChannel === 'edge' ? 'msedge' : 'chrome';
     const ext = language === 'java' ? 'java' : 'py';
-    this.outputFile = path.join(os.tmpdir(), `softplay-codegen-${Date.now()}.${ext}`);
+    this.outputFile = path.join(os.tmpdir(), `SoftPlay-codegen-${Date.now()}.${ext}`);
     this.lastFileContent = '';
     this.lastEmittedContent = '';
     this.currentLanguage = language;

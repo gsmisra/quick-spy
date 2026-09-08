@@ -137,7 +137,7 @@ export class FeatureFilePanel implements vscode.Disposable {
       const bytes = await vscode.workspace.fs.readFile(uri);
       content = new TextDecoder('utf-8').decode(bytes);
     } catch (err) {
-      void vscode.window.showErrorMessage(`softPlay: could not read feature file — ${describeError(err)}`);
+      void vscode.window.showErrorMessage(`SoftPlay: could not read feature file — ${describeError(err)}`);
       return;
     }
 
@@ -147,7 +147,7 @@ export class FeatureFilePanel implements vscode.Disposable {
 
     if (this.feature.scenarios.length === 0) {
       void vscode.window.showWarningMessage(
-        'softPlay: no Scenario or Scenario Outline found in that file — check it\'s a valid .feature file.'
+        'SoftPlay: no Scenario or Scenario Outline found in that file — check it\'s a valid .feature file.'
       );
       return;
     }
@@ -162,7 +162,7 @@ export class FeatureFilePanel implements vscode.Disposable {
       return;
     }
     this.panel = vscode.window.createWebviewPanel(
-      'softPlayFeatureFile',
+      'SoftPlayFeatureFile',
       `Feature: ${this.feature?.name || path.basename(this.filePath)}`,
       vscode.ViewColumn.Beside,
       { enableScripts: true, retainContextWhenHidden: true }
