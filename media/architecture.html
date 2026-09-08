@@ -285,6 +285,7 @@
     <a href="#lifecycle">Request Lifecycle</a>
     <a href="#caching">Caching</a>
     <a href="#llm">LLM Integration</a>
+    <a href="#verify-fix-agent">Verify &amp; Fix Agent</a>
     <a href="#dataflow">Data Flow</a>
     <a href="#components">Components</a>
     <a href="#functions">Function Reference</a>
@@ -304,6 +305,7 @@
       GitHub Copilot LLM, and how to use every button on screen — from architect deep-dive to first-time click-through.
     </p>
     <div class="badge-row">
+      <span class="pill on">🦜🔗 LangChain-powered Agent</span>
       <span class="pill on">Offline-first</span>
       <span class="pill">No external cache server</span>
       <span class="pill">Local system memory only</span>
@@ -327,6 +329,7 @@
       <li><span class="num">4</span><span class="desc"><b>The LLM is never bundled or self-hosted.</b> softPlay borrows the user's own GitHub Copilot Chat subscription via VS Code's standard <code>vscode.lm</code> API — no API keys stored, no separate billing relationship.</span></li>
       <li><span class="num">5</span><span class="desc"><b>Caching is intentionally simple:</b> three in-memory, TTL-bound caches (no Redis, no disk database) cut down repeated process spawns and repeated LLM token-counting calls, without ever risking a stale answer for something that matters.</span></li>
       <li><span class="num">6</span><span class="desc"><b>Every credential is encrypted by default</b> — in both modes, with no setting to turn it off. See "Auto Password Encryption" in Components.</span></li>
+      <li><span class="num">7</span><span class="desc"><b>"Verify & Fix Code" is a real LangChain tool-calling agent</b> — not a hardcoded retry loop. It runs the code itself, reads whatever context it decides it needs, and only stops on a machine-verified pass — see "Verify & Fix Agent" below.</span></li>
     </ul>
   </div>
 </section>
@@ -553,6 +556,142 @@
   </div>
 </section>
 
+<!-- ================= VERIFY & FIX AGENT (LANGCHAIN) ================= -->
+<section id="verify-fix-agent">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="eyebrow">🦜🔗 New — built with LangChain</span>
+      <h2>Verify &amp; Fix Agent</h2>
+      <p>"Verify &amp; Fix Code" no longer runs a hardcoded loop — it runs a small, bounded <b>LangChain tool-calling agent</b> that tests its own work and decides for itself what to do next.</p>
+    </div>
+
+    <div class="card" style="margin-bottom:28px;">
+      <span class="tag">Executive summary</span>
+      <h3 style="font-size:19px;">The AI now tests its own work instead of guessing blind</h3>
+      <p>
+        Before: softPlay ran the code once, and on failure, sent the error to Copilot for a single guess at a fix —
+        repeated up to 5 times, hoping each guess was better than the last. Now: a real autonomous agent, built on
+        <b>LangChain</b> (the industry-standard framework for tool-using AI agents), is handed three tools — run the
+        code, read a file, read the linked test scenario — and it decides for itself, turn by turn, whether it has
+        enough information, whether to look something up first, and when its fix is actually correct. It never just
+        <i>claims</i> success: the loop only stops when the code has genuinely, verifiably run without error.
+      </p>
+    </div>
+
+    <div class="grid cols-3" style="margin-bottom:10px;">
+      <div class="card tight">
+        <span class="tag">🏃 Tool 1</span>
+        <h3><code>run_code</code></h3>
+        <p>Compiles/runs the agent's current candidate for real, in the same disposable scratch project as before. A human must approve every single execution — no exceptions, exactly like the feature this replaces.</p>
+      </div>
+      <div class="card tight">
+        <span class="tag">📄 Tool 2</span>
+        <h3><code>read_file</code></h3>
+        <p>Lets the agent inspect a file inside its own scratch project (a build file, an earlier run's output). Every path is checked to stay inside that one folder — it can never reach anywhere else on the machine.</p>
+      </div>
+      <div class="card tight">
+        <span class="tag">🥒 Tool 3</span>
+        <h3><code>read_feature_file</code></h3>
+        <p>Read-only access to whichever Cucumber <code>.feature</code> file the user already linked via "Link Feature file" — the scenario the fixed code needs to satisfy.</p>
+      </div>
+    </div>
+
+    <h2 class="inline-h">How one Verify &amp; Fix Code session actually runs</h2>
+    <div class="card">
+      <div class="diagram">
+        <div class="row">
+          <div class="node webview"><b>User clicks "Verify &amp; Fix Code"</b><span>same button, same panel as before</span></div>
+        </div>
+        <div class="arrow-down">▼</div>
+        <div class="row">
+          <div class="node engine"><b>LangChain agent starts</b><span>system prompt + mandatory coding standard + original context</span></div>
+        </div>
+        <div class="arrow-down">▼</div>
+        <div class="row">
+          <div class="node webview"><b>🙋 Human confirms this exact run</b><span>modal Yes/No — enforced inside the run_code tool itself</span></div>
+        </div>
+        <div class="arrow-down">▼</div>
+        <div class="row">
+          <div class="node cloud"><b>run_code executes it for real</b><span>headless run / compile, same testExecutor.ts as before</span></div>
+        </div>
+        <div class="arrow-down">▼</div>
+        <div class="row">
+          <div class="node cache"><b>Passed?</b><span>YES → stop, Code Correctness Confirmed. NO → continue below</span></div>
+        </div>
+        <div class="arrow-down">▼</div>
+        <div class="row">
+          <div class="node fs"><b>Agent decides what it needs</b><span>read_file / read_feature_file — its choice, not pre-scripted</span></div>
+          <div class="node engine"><b>Agent proposes a fix</b><span>a full corrected file, never a partial diff</span></div>
+        </div>
+        <div class="arrow-down">▼ loops back to "Human confirms" — up to 5 real executions, ≤ 17 total agent turns</div>
+      </div>
+    </div>
+
+    <h2 class="inline-h">Where LangChain fits, precisely</h2>
+    <div class="grid cols-2">
+      <div class="card">
+        <span class="tag">@langchain/core — BaseChatModel</span>
+        <h3><code>VSCodeCopilotToolCallingModel</code></h3>
+        <p>A custom adapter class extending LangChain's <code>BaseChatModel</code>, wrapping the exact same <code>vscode.LanguageModelChat</code> handle every other Copilot call in this extension uses. LangChain never talks to a model directly here — it talks through this adapter, which translates to/from <code>vscode.lm</code>'s own native tool-calling API (<code>LanguageModelChatTool</code>, <code>LanguageModelToolCallPart</code>). No second credential, no different provider — same Copilot subscription, same consent dialog.</p>
+      </div>
+      <div class="card">
+        <span class="tag">@langchain/core — tools &amp; messages</span>
+        <h3><code>tool()</code> + Zod schemas, <code>AIMessage</code>/<code>ToolMessage</code></h3>
+        <p>Each of the three tools above is a real LangChain <code>StructuredTool</code>, its input validated by a <a href="https://zod.dev" target="_blank" rel="noopener">Zod</a> schema before it ever runs. The conversation itself is built from LangChain's own message types (<code>SystemMessage</code>, <code>HumanMessage</code>, <code>AIMessage</code>, <code>ToolMessage</code>) — the same primitives used across the entire LangChain ecosystem.</p>
+      </div>
+      <div class="card">
+        <span class="tag">Deliberately NOT used</span>
+        <h3>LangChain's <code>AgentExecutor</code></h3>
+        <p>The turn-by-turn loop is hand-written (<code>runToolCallingAgent()</code>) directly over LangChain's core primitives rather than LangChain's own general-purpose agent executor — a regulated environment needs an auditable, fully explicit stopping condition (a tool-verified pass, never the model's self-assessment), which a hand-rolled loop guarantees far more transparently than a general-purpose black box.</p>
+      </div>
+      <div class="card">
+        <span class="tag">Deliberately NOT used</span>
+        <h3>LangSmith tracing</h3>
+        <p>LangChain's tracing/telemetry SDK ships as a dependency of <code>@langchain/core</code> but is opt-in only (activated by an environment variable this extension never sets). An automated test actively proves zero outbound network calls happen during an agent run — see Quality &amp; Testing below — rather than only documenting the claim.</p>
+      </div>
+    </div>
+
+    <h2 class="inline-h">Enterprise safeguards</h2>
+    <div class="grid cols-2">
+      <div class="card tight">
+        <span class="tag">🛟 Automatic fallback</span>
+        <p>If the agent path fails for any reason unrelated to the code itself (e.g. Copilot temporarily unavailable), softPlay automatically falls back to the exact, original, previously-shipped fix loop — kept in the codebase verbatim as <code>runLegacyVerifyFixLoop()</code> — so this rewrite can never leave "Verify &amp; Fix Code" more broken than before it existed.</p>
+      </div>
+      <div class="card tight">
+        <span class="tag">🔒 Sandboxed file access</span>
+        <p><code>read_file</code>'s path is checked against the scratch directory on every call (<code>resolveWithinScratchDir()</code>) — an absolute path, a <code>..</code> traversal, or a sibling-directory trick are all rejected. Directly unit tested against ten adversarial path shapes.</p>
+      </div>
+      <div class="card tight">
+        <span class="tag">⏱️ Bounded, always</span>
+        <p>A hard cap on real executions (5, same as before) AND a separate hard cap on total agent turns (17) — a pathological loop that only ever inspects files without acting can never run away in cost or latency.</p>
+      </div>
+      <div class="card tight">
+        <span class="tag">🙋 Human-in-the-loop, unchanged</span>
+        <p>The confirmation modal before every single code execution — the one safeguard this whole feature is built around — lives inside the <code>run_code</code> tool itself, so it holds no matter how many turns the agent takes internally.</p>
+      </div>
+    </div>
+
+    <h2 class="inline-h">Quality &amp; testing</h2>
+    <div class="card">
+      <p style="margin-bottom:14px;">
+        The agent's entire decision-making core (<code>agent/verifyFixAgent.ts</code>) has zero dependency on <code>vscode</code>
+        by design, specifically so it can be driven by a scripted fake model in a plain, fast, offline unit test suite —
+        no Extension Development Host, no real Copilot subscription, no network access required to run it.
+      </p>
+      <div class="grid cols-4">
+        <div class="card tight"><span class="tag">20/20 passing</span><p>Node's built-in test runner (<code>node --test</code>) — zero new test-framework dependency.</p></div>
+        <div class="card tight"><span class="tag">Every stop condition</span><p>Success, decline, max-steps, no-further-action, cancellation, and hard model errors — each has its own test.</p></div>
+        <div class="card tight"><span class="tag">Security path tested</span><p>10 adversarial path-traversal shapes against <code>read_file</code>'s sandbox, individually asserted.</p></div>
+        <div class="card tight"><span class="tag">Network isolation proven</span><p>A live test subscribes to Node's socket-open diagnostics channel and asserts zero connections during a full agent run.</p></div>
+      </div>
+      <div class="callout" style="margin-top:18px;">
+        <span class="emoji">🚦</span>
+        <span>The build pipeline (<code>build-extension.bat</code>) now runs this full test suite as its own step — a failing test fails the build, before a <code>.vsix</code> is ever produced.</span>
+      </div>
+    </div>
+  </div>
+</section>
+
 <!-- ================= DATA FLOW ================= -->
 <section id="dataflow" class="alt">
   <div class="wrap">
@@ -676,6 +815,11 @@
       <tr><td>cache/fileCache.ts</td><td>mtime-validated file-content caching for both bundled and workspace files.</td></tr>
       <tr><td>security/secretVault.ts</td><td>Auto Password Encryption's cryptographic core — key management via <code>SecretStorage</code>, AES-256-CTR + HMAC-SHA256 encrypt/decrypt, the <code>ENC[v1:...]</code> token format.</td></tr>
       <tr><td>security/uiPasswordRedactor.ts</td><td>UI Automation's half of Auto Password Encryption — finds password-shaped <code>.fill()</code>/<code>.type()</code> literals in recorded code and replaces them with encrypted tokens before any prompt is built.</td></tr>
+      <tr><td>agent/verifyFixAgent.ts</td><td>The Verify &amp; Fix Agent's tool-calling loop, built on LangChain (<code>@langchain/core</code>) — zero <code>vscode</code> dependency by design, so it's covered by a plain offline unit test suite.</td></tr>
+      <tr><td>agent/vscodeCopilotToolCallingModel.ts</td><td>A LangChain <code>BaseChatModel</code> adapter wrapping <code>vscode.LanguageModelChat</code> — the one bridge between LangChain and GitHub Copilot's native tool-calling API.</td></tr>
+      <tr><td>agent/verifyFixTools.ts</td><td>The three LangChain tools (<code>run_code</code>, <code>read_file</code>, <code>read_feature_file</code>) the agent is given, each a Zod-validated <code>StructuredTool</code>.</td></tr>
+      <tr><td>agent/verifyFixOrchestrator.ts</td><td>Resolves the real Copilot model and wires the tools/adapter/agent loop together for one Verify &amp; Fix Code session.</td></tr>
+      <tr><td>agent/scratchPath.ts</td><td>The <code>read_file</code> tool's path-containment guard — pure, dependency-free, and unit tested against 10 traversal attack shapes.</td></tr>
     </table>
   </div>
 </section>
@@ -788,6 +932,17 @@
         <div class="fn"><span class="sig">getSecretEnv()</span><span class="desc">Base64 key packaged as SOFTPLAY_SECRET_KEY, injected into the child process running "Verify &amp; Fix Code".</span></div>
         <div class="fn"><span class="sig">looksLikeSecretField()</span><span class="desc">Heuristic match (password/pwd/secret/token/pin/api-key/...) used to find credential-shaped fields.</span></div>
         <div class="fn"><span class="sig">encryptPasswordLiteralsInCode()</span><span class="desc">Scans recorded UI code line-by-line and replaces a password-shaped .fill()/.type() literal with a decrypt() call over an encrypted token.</span></div>
+      </div>
+    </details>
+
+    <details class="filecard">
+      <summary><span class="path">agent/verifyFixAgent.ts, verifyFixTools.ts, vscodeCopilotToolCallingModel.ts, verifyFixOrchestrator.ts, scratchPath.ts</span><span class="role">🦜🔗 Verify &amp; Fix Agent (LangChain)</span></summary>
+      <div class="fnlist">
+        <div class="fn"><span class="sig">runToolCallingAgent()</span><span class="desc">The vscode-free agent loop core — drives the model/tool turns to one of six deterministic stop reasons.</span></div>
+        <div class="fn"><span class="sig">VSCodeCopilotToolCallingModel._generate()</span><span class="desc">LangChain BaseChatModel override — converts messages/tools to vscode.lm's wire format and back.</span></div>
+        <div class="fn"><span class="sig">createRunCodeTool() / createReadScratchFileTool() / createReadFeatureFileTool()</span><span class="desc">The three Zod-validated LangChain tools the agent is given.</span></div>
+        <div class="fn"><span class="sig">runVerifyFixAgent()</span><span class="desc">Resolves the Copilot model, builds the tools, and starts one agent session.</span></div>
+        <div class="fn"><span class="sig">resolveWithinScratchDir()</span><span class="desc">Pure path-containment check behind read_file — unit tested against 10 traversal shapes.</span></div>
       </div>
     </details>
 

@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
 import { CodegenManager, CodegenStatus } from '../browser/codegenManager';
-import { SettingsStore } from '../settings/settingsStore';
+import { ObjectSpySettings, SettingsStore } from '../settings/settingsStore';
 import { SettingsPanel } from './settingsPanel';
 import { FeatureFilePanel, LinkedScenario } from './featureFilePanel';
 import { AiCodePanel } from './aiCodePanel';
@@ -14,6 +14,7 @@ import { ApiRequestDetails, SecretEncryptor, buildApiRequestSummary, hasApiReque
 import { readFileCachedSync, readWorkspaceFileCached } from '../cache/fileCache';
 import * as secretVault from '../security/secretVault';
 import { encryptPasswordLiteralsInCode } from '../security/uiPasswordRedactor';
+import { runVerifyFixAgent } from '../agent/verifyFixOrchestrator';
 
 type InboundMessage =
   | { type: 'start'; payload?: string }
@@ -831,126 +832,374 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
       const scratchDir = path.join(this.context.globalStorageUri.fsPath, 'test-runner', settings.automationMode, settings.language);
       await fs.promises.mkdir(scratchDir, { recursive: true });
 
-      let code = initialCode;
-      for (let attempt = 1; attempt <= ObjectSpyPanel.MAX_VERIFY_ATTEMPTS; attempt++) {
-        const choice = await vscode.window.showWarningMessage(
-          attempt === 1
-            ? `Run the AI-generated code now to verify it ${isApiMode ? 'compiles/parses' : 'executes headless'} without errors?`
-            : `Attempt ${attempt} of ${ObjectSpyPanel.MAX_VERIFY_ATTEMPTS}: re-run the LLM-fixed code to verify it now ${isApiMode ? 'compiles/parses' : 'executes headless'} without errors?`,
-          { modal: true },
-          'Yes',
-          'No'
-        );
-        if (choice !== 'Yes') {
-          this.aiCodePanel.setVerifyStatus(
-            `Stopped before attempt ${attempt} — current code's errors are shown in the softPlay Output channel for manual fixing.`,
-            'error'
-          );
-          return;
-        }
-
-        this.aiCodePanel.setVerifyStatus(`Running attempt ${attempt} of ${ObjectSpyPanel.MAX_VERIFY_ATTEMPTS}…`, 'info');
-        const result = await executeGeneratedCode(
-          settings.language,
-          code,
-          scratchDir,
-          this.linkedScenario?.featureFilePath,
-          pythonCommand,
-          settings.automationMode,
-          this.context.extensionUri.fsPath,
-          // SOFTPLAY_SECRET_KEY — lets the generated code's own
-          // SecretVault.decrypt()/decrypt_secret() call actually resolve a
-          // credential Auto Password Encryption encrypted (see
-          // security/secretVault.ts). Harmless to always pass: unused by
-          // code with no encrypted values in it.
-          await secretVault.getSecretEnv(this.context)
-        );
+      try {
+        await this.runVerifyFixAgentPath(settings, isApiMode, scratchDir, pythonCommand, initialCode);
+      } catch (err) {
+        // The tool-calling agent hit something beyond "the generated code
+        // has a bug" — Copilot itself unavailable, a malformed tool-calling
+        // response, etc. Never leave the user stuck: fall back to the
+        // original, proven fixed-attempt-count loop this feature replaced
+        // (kept verbatim as runLegacyVerifyFixLoop() below) rather than
+        // surface a raw agent-framework error.
+        const message = describeError(err);
         this.outputChannel.appendLine(
-          `Verify & Fix Code — attempt ${attempt}: ${result.success ? 'PASSED' : 'FAILED'}` +
-            `${result.compileOnly ? ' (compile/collect-only check)' : ''}` +
-            `${result.apiCallOutcome !== 'not-run' ? ` — live API call ${result.apiCallOutcome}` : ''}\n${result.output}`
+          `Verify & Fix Code — the tool-calling agent failed unexpectedly (${message}); falling back to the classic single-shot fix loop.`
         );
-
-        if (result.success) {
-          if (result.compileOnly) {
-            this.aiCodePanel.setVerifyStatus(
-              'Compiled successfully — BDD step definitions have no generated runner to fully execute yet, so this is a compile check, not a confirmed run.',
-              'success'
-            );
-          } else if (isApiMode) {
-            if (result.apiCallOutcome === 'failed') {
-              this.aiCodePanel.setVerifyStatus(
-                'Code Correctness Confirmed — no syntax errors. The live API call itself returned an error response ' +
-                  '(see the softPlay Output channel) — recheck the endpoint URL/credentials and try again in your own IDE/test package.',
-                'success'
-              );
-            } else {
-              this.aiCodePanel.setVerifyStatus('Code Correctness Confirmed — compiled cleanly and the API call succeeded.', 'success');
-            }
-            this.postCodeCorrectness(true);
-          } else {
-            this.aiCodePanel.setVerifyStatus('Code Correctness Confirmed — ran headless without errors.', 'success');
-            this.postCodeCorrectness(true);
-          }
-          return;
-        }
-
-        if (attempt === ObjectSpyPanel.MAX_VERIFY_ATTEMPTS) {
-          this.aiCodePanel.setVerifyStatus(
-            `Still failing after ${ObjectSpyPanel.MAX_VERIFY_ATTEMPTS} attempts — see the softPlay Output channel for the exact error and fix manually.`,
-            'error'
-          );
-          return;
-        }
-
-        this.aiCodePanel.setVerifyStatus(`Attempt ${attempt} failed — asking the LLM to fix it…`, 'info');
-        // Auto Password Encryption applies here too — this "original
-        // context" is resent to Copilot on every single fix attempt, so the
-        // real recorded/API credential must never appear in it any more
-        // than in the original request.
-        const originalContext = isApiMode
-          ? {
-              label: 'Original API Request Details (the ground truth for this request — refer back to this if the error suggests one was used incorrectly)',
-              content: this.lastApiRequestDetails ? await buildApiRequestSummary(this.lastApiRequestDetails, this.getEncryptSecret()) : '(not available)'
-            }
-          : {
-              label:
-                'Original Playwright Codegen output (real recording, see note above about credentials — the ground truth for which locators and actions are actually correct; refer back to this if the error suggests one was used incorrectly)',
-              content: `\`\`\`${settings.language}\n${(await encryptPasswordLiteralsInCode(this.context, this.nativeGeneratedCode, settings.language)).code}\n\`\`\``
-            };
-        const fixPrompt = buildFixPrompt(
-          isApiMode ? readApiAutomationInstructions() : readSeniorQeInstructions(),
-          originalContext,
-          code,
-          result.output,
-          settings.language,
-          settings.automationMode
-        );
-        this.outputChannel.appendLine(
-          `Verify & Fix Code — sending fix request to Copilot model "${settings.copilotModelId}": prompt is ${fixPrompt.length} chars.`
-        );
-        this.aiCodePanel.startGenerating();
-        this.postAiCodeAvailable(false);
-        const cts = new vscode.CancellationTokenSource();
-        try {
-          const fixed = await this.streamCopilotResponse(fixPrompt, settings.copilotModelId, cts, (chunk) =>
-            this.aiCodePanel.appendChunk(chunk)
-          );
-          code = extractCodeBlock(fixed);
-          this.aiCodePanel.finish(code);
-          this.postAiCodeAvailable(true);
-        } catch (err) {
-          const message = err instanceof CopilotUnavailableError ? err.message : describeError(err);
-          this.outputChannel.appendLine(`Verify & Fix Code — Copilot fix request failed: ${message}`);
-          this.aiCodePanel.showError(message);
-          this.aiCodePanel.setVerifyStatus(`Could not get a fix from Copilot: ${message}`, 'error');
-          return;
-        } finally {
-          cts.dispose();
-        }
+        await this.runLegacyVerifyFixLoop(settings, isApiMode, scratchDir, pythonCommand, initialCode);
       }
     } finally {
       this.aiCodePanel.setVerifyButtonEnabled(true);
+    }
+  }
+
+  /**
+   * The primary "Verify & Fix Code" path since the tool-calling agent
+   * rewrite — a small, bounded LangChain agent (see agent/verifyFixAgent.ts)
+   * given three tools (run_code, read_file, read_feature_file — see
+   * agent/verifyFixTools.ts) drives its own run → inspect → fix → re-run
+   * cycle instead of this method hardcoding exactly one fix-prompt per
+   * failed attempt. The human-in-the-loop confirmation before every single
+   * execution is enforced INSIDE the run_code tool itself (see
+   * `confirmRun` below), so it holds regardless of how many turns the
+   * agent takes internally.
+   */
+  private async runVerifyFixAgentPath(
+    settings: ObjectSpySettings,
+    isApiMode: boolean,
+    scratchDir: string,
+    pythonCommand: string,
+    initialCode: string
+  ): Promise<void> {
+    const originalContext = await this.buildOriginalContextForFix(settings, isApiMode);
+    const builtInStandard = isApiMode ? readApiAutomationInstructions() : readSeniorQeInstructions();
+
+    const systemPrompt =
+      `You are an expert ${isApiMode ? 'API' : 'UI/Playwright'} test automation engineer working on an enterprise ` +
+      `QA codebase, operating as an autonomous fixing agent with tools. Your job: make the given ${settings.language} ` +
+      `file actually compile/run correctly, using the tools you're given rather than guessing blind.\n\n` +
+      `Rules:\n` +
+      `1. Call run_code FIRST with the file exactly as given, before changing anything — this captures the real, ` +
+      `current error.\n` +
+      `2. If it fails, use read_file and/or read_feature_file if you need more context, then call run_code again ` +
+      `with your corrected version of the COMPLETE file (never a diff or snippet).\n` +
+      `3. Fix ONLY what's necessary to resolve the reported error. Do not restructure or rewrite parts of the code ` +
+      `that aren't implicated by it. Keep the same class/file name, the same target language/runtime version` +
+      `${isApiMode ? '' : ', the same browser-executable launch override (never remove or weaken it)'}, and the ` +
+      `overall structure — this is a targeted fix, not a rewrite.\n` +
+      `4. Every fixed version you submit via run_code must still follow the mandatory refinement standard below, ` +
+      `in full.\n` +
+      `5. If run_code reports the user declined to run it, stop immediately — do not call any other tool.\n` +
+      (builtInStandard ? `\n## Mandatory refinement standard — every version you submit must follow every part of this\n${builtInStandard}` : '');
+
+    const userPrompt =
+      `## ${originalContext.label}\n${originalContext.content}\n\n` +
+      `## Current file to verify and, if necessary, fix\n\`\`\`${settings.language}\n${initialCode}\n\`\`\``;
+
+    this.outputChannel.appendLine(
+      `Verify & Fix Code (agent) — starting with Copilot model "${settings.copilotModelId}": system prompt is ` +
+        `${systemPrompt.length} chars, user prompt is ${userPrompt.length} chars.`
+    );
+
+    this.llmCancellation?.cancel();
+    this.llmCancellation?.dispose();
+    const cts = new vscode.CancellationTokenSource();
+    this.llmCancellation = cts;
+
+    let lastShownCode = initialCode;
+    // Tracked from every run_code tool result so the final status — for a
+    // 'max_steps'/'no_further_action' stop, which has no dedicated error
+    // field of its own — can still tell the user what actually went wrong
+    // on the last real attempt, not just that the agent gave up.
+    let lastKnownError: string | undefined;
+    const result = await runVerifyFixAgent({
+      modelId: settings.copilotModelId,
+      systemPrompt,
+      userPrompt,
+      maxAttempts: ObjectSpyPanel.MAX_VERIFY_ATTEMPTS,
+      // Comfortably above maxAttempts so the agent can call read_file/
+      // read_feature_file between executions without instantly exhausting
+      // its turn budget, while still bounded (see verifyFixAgent.ts).
+      maxSteps: ObjectSpyPanel.MAX_VERIFY_ATTEMPTS * 3 + 2,
+      cancellationToken: cts.token,
+      runCodeDeps: {
+        language: settings.language,
+        scratchDir,
+        linkedFeatureFilePath: this.linkedScenario?.featureFilePath,
+        pythonCommand,
+        automationMode: settings.automationMode,
+        resourcesRoot: this.context.extensionUri.fsPath,
+        secretEnv: await secretVault.getSecretEnv(this.context)
+      },
+      confirmRun: async (attempt, maxAttempts, lastErrorOutput) => {
+        const choice = await vscode.window.showWarningMessage(
+          attempt === 1
+            ? `Run the AI-generated code now to verify it ${isApiMode ? 'compiles/parses' : 'executes headless'} without errors?`
+            : `Attempt ${attempt} of ${maxAttempts}: re-run the agent-fixed code to verify it now ${isApiMode ? 'compiles/parses' : 'executes headless'} without errors?`,
+          // `detail` shows the PREVIOUS attempt's actual error — so the
+          // user can judge whether this is something Copilot should keep
+          // trying to fix, or something they'd rather fix themselves,
+          // instead of approving another run blind. Absent on attempt 1
+          // (nothing has failed yet).
+          lastErrorOutput ? { modal: true, detail: truncateForDialog(lastErrorOutput) } : { modal: true },
+          'Yes',
+          'No'
+        );
+        return choice === 'Yes';
+      },
+      onOutput: (line) => this.outputChannel.appendLine(line),
+      onStep: (log) => {
+        // Full audit trail — every tool call and result the agent made,
+        // exactly what a bank's QA/security review would ask to see for
+        // "what did the AI actually do" (see architecture.html).
+        this.outputChannel.appendLine(`Verify & Fix Code (agent) — [${log.kind}${log.toolName ? `:${log.toolName}` : ''}] ${log.detail}`);
+        // Mirrors the pre-agent UX where each fix attempt's code streamed
+        // into the AI Generated Code panel as it was produced — here, the
+        // moment the agent commits to trying a new candidate (a run_code
+        // call), that candidate is shown immediately rather than only
+        // after the whole agent session ends.
+        if (log.kind === 'tool_call' && log.toolName === 'run_code') {
+          try {
+            const args = JSON.parse(log.detail) as { code?: string };
+            if (typeof args.code === 'string' && args.code !== lastShownCode) {
+              lastShownCode = args.code;
+              this.aiCodePanel.finish(args.code);
+              this.postAiCodeAvailable(true);
+            }
+          } catch {
+            // Malformed tool-call args JSON — cosmetic only (the actual
+            // run still proceeds); nothing to react to here.
+          }
+        }
+        if (log.kind === 'tool_result' && log.toolName === 'run_code') {
+          try {
+            const parsed = JSON.parse(log.detail) as { signal?: string; output?: string };
+            // A failure result has `output`; a success result doesn't
+            // (see verifyFixTools.ts) — only overwrite on an actual
+            // failure, so a later successful attempt doesn't need to
+            // clear this (the 'success' branch below never reads it).
+            if (parsed.signal !== 'success' && typeof parsed.output === 'string') {
+              lastKnownError = parsed.output;
+            }
+          } catch {
+            // Malformed/unexpected tool-result JSON — nothing to react to.
+          }
+        }
+      }
+    });
+
+    if (cts.token.isCancellationRequested) {
+      return;
+    }
+
+    switch (result.stopReason) {
+      case 'success': {
+        const compileOnly = Boolean(result.raw?.compileOnly);
+        const apiCallOutcome = result.raw?.apiCallOutcome as 'passed' | 'failed' | 'not-run' | undefined;
+        if (result.finalCode) {
+          this.aiCodePanel.finish(result.finalCode);
+          this.postAiCodeAvailable(true);
+        }
+        if (compileOnly) {
+          this.aiCodePanel.setVerifyStatus(
+            'Compiled successfully — BDD step definitions have no generated runner to fully execute yet, so this is a compile check, not a confirmed run.',
+            'success'
+          );
+        } else if (isApiMode) {
+          if (apiCallOutcome === 'failed') {
+            this.aiCodePanel.setVerifyStatus(
+              'Code Correctness Confirmed — no syntax errors. The live API call itself returned an error response ' +
+                '(see the softPlay Output channel) — recheck the endpoint URL/credentials and try again in your own IDE/test package.',
+              'success'
+            );
+          } else {
+            this.aiCodePanel.setVerifyStatus('Code Correctness Confirmed — compiled cleanly and the API call succeeded.', 'success');
+          }
+          this.postCodeCorrectness(true);
+        } else {
+          this.aiCodePanel.setVerifyStatus('Code Correctness Confirmed — ran headless without errors.', 'success');
+          this.postCodeCorrectness(true);
+        }
+        return;
+      }
+      case 'declined':
+        this.aiCodePanel.setVerifyStatus(
+          `${result.summary}${lastKnownError ? ` Last error: ${truncateForStatusLine(lastKnownError)}` : ''} Current code's errors are shown in the softPlay Output channel for manual fixing.`,
+          'error'
+        );
+        return;
+      case 'max_steps':
+        this.aiCodePanel.setVerifyStatus(
+          `${result.summary}${lastKnownError ? ` Last error: ${truncateForStatusLine(lastKnownError)}` : ''}`,
+          'error'
+        );
+        return;
+      case 'no_further_action':
+        this.aiCodePanel.setVerifyStatus(
+          `Copilot stopped without a confirmed fix: ${result.summary}${lastKnownError ? ` Last error: ${truncateForStatusLine(lastKnownError)}` : ''}`,
+          'error'
+        );
+        return;
+      case 'cancelled':
+        return;
+      case 'error':
+        // Re-thrown so verifyAndFixCode()'s caller falls back to
+        // runLegacyVerifyFixLoop() — see that method's own doc comment.
+        throw result.error ?? new Error(result.summary);
+    }
+  }
+
+  /** Auto Password Encryption applies here too — this "original context" is
+   * resent to Copilot on every single fix attempt (agent tool call or
+   * legacy loop iteration alike), so the real recorded/API credential must
+   * never appear in it any more than in the original request. Shared by
+   * both runVerifyFixAgentPath() and runLegacyVerifyFixLoop() so the two
+   * paths can never drift apart on this. */
+  private async buildOriginalContextForFix(
+    settings: ObjectSpySettings,
+    isApiMode: boolean
+  ): Promise<{ label: string; content: string }> {
+    return isApiMode
+      ? {
+          label: 'Original API Request Details (the ground truth for this request — refer back to this if the error suggests one was used incorrectly)',
+          content: this.lastApiRequestDetails ? await buildApiRequestSummary(this.lastApiRequestDetails, this.getEncryptSecret()) : '(not available)'
+        }
+      : {
+          label:
+            'Original Playwright Codegen output (real recording, see note above about credentials — the ground truth for which locators and actions are actually correct; refer back to this if the error suggests one was used incorrectly)',
+          content: `\`\`\`${settings.language}\n${(await encryptPasswordLiteralsInCode(this.context, this.nativeGeneratedCode, settings.language)).code}\n\`\`\``
+        };
+  }
+
+  /**
+   * The ORIGINAL "Verify & Fix Code" implementation, unchanged, kept as an
+   * automatic fallback for when the new tool-calling agent path
+   * (runVerifyFixAgentPath()) fails outright — see verifyAndFixCode()'s
+   * try/catch. Never invoked when the agent path itself works, success or
+   * failure; only when it throws (Copilot unavailable, an unexpected
+   * agent-framework error, ...). Keeping this exact, previously-shipped
+   * code path intact — not deleted, not refactored — is the safety net
+   * behind "the new implementation must not break existing stable
+   * behavior."
+   */
+  private async runLegacyVerifyFixLoop(
+    settings: ObjectSpySettings,
+    isApiMode: boolean,
+    scratchDir: string,
+    pythonCommand: string,
+    initialCode: string
+  ): Promise<void> {
+    let code = initialCode;
+    // Set after every failed attempt (below) and shown in the NEXT
+    // attempt's confirmation dialog, so "re-run?" is an informed decision
+    // rather than a blind one — same reasoning as runVerifyFixAgentPath()'s
+    // confirmRun().
+    let lastErrorOutput: string | undefined;
+    for (let attempt = 1; attempt <= ObjectSpyPanel.MAX_VERIFY_ATTEMPTS; attempt++) {
+      const choice = await vscode.window.showWarningMessage(
+        attempt === 1
+          ? `Run the AI-generated code now to verify it ${isApiMode ? 'compiles/parses' : 'executes headless'} without errors?`
+          : `Attempt ${attempt} of ${ObjectSpyPanel.MAX_VERIFY_ATTEMPTS}: re-run the LLM-fixed code to verify it now ${isApiMode ? 'compiles/parses' : 'executes headless'} without errors?`,
+        lastErrorOutput ? { modal: true, detail: truncateForDialog(lastErrorOutput) } : { modal: true },
+        'Yes',
+        'No'
+      );
+      if (choice !== 'Yes') {
+        this.aiCodePanel.setVerifyStatus(
+          `Stopped before attempt ${attempt} — current code's errors are shown in the softPlay Output channel for manual fixing.`,
+          'error'
+        );
+        return;
+      }
+
+      this.aiCodePanel.setVerifyStatus(`Running attempt ${attempt} of ${ObjectSpyPanel.MAX_VERIFY_ATTEMPTS}…`, 'info');
+      const result = await executeGeneratedCode(
+        settings.language,
+        code,
+        scratchDir,
+        this.linkedScenario?.featureFilePath,
+        pythonCommand,
+        settings.automationMode,
+        this.context.extensionUri.fsPath,
+        // SOFTPLAY_SECRET_KEY — lets the generated code's own
+        // SecretVault.decrypt()/decrypt_secret() call actually resolve a
+        // credential Auto Password Encryption encrypted (see
+        // security/secretVault.ts). Harmless to always pass: unused by
+        // code with no encrypted values in it.
+        await secretVault.getSecretEnv(this.context)
+      );
+      this.outputChannel.appendLine(
+        `Verify & Fix Code — attempt ${attempt}: ${result.success ? 'PASSED' : 'FAILED'}` +
+          `${result.compileOnly ? ' (compile/collect-only check)' : ''}` +
+          `${result.apiCallOutcome !== 'not-run' ? ` — live API call ${result.apiCallOutcome}` : ''}\n${result.output}`
+      );
+
+      if (result.success) {
+        if (result.compileOnly) {
+          this.aiCodePanel.setVerifyStatus(
+            'Compiled successfully — BDD step definitions have no generated runner to fully execute yet, so this is a compile check, not a confirmed run.',
+            'success'
+          );
+        } else if (isApiMode) {
+          if (result.apiCallOutcome === 'failed') {
+            this.aiCodePanel.setVerifyStatus(
+              'Code Correctness Confirmed — no syntax errors. The live API call itself returned an error response ' +
+                '(see the softPlay Output channel) — recheck the endpoint URL/credentials and try again in your own IDE/test package.',
+              'success'
+            );
+          } else {
+            this.aiCodePanel.setVerifyStatus('Code Correctness Confirmed — compiled cleanly and the API call succeeded.', 'success');
+          }
+          this.postCodeCorrectness(true);
+        } else {
+          this.aiCodePanel.setVerifyStatus('Code Correctness Confirmed — ran headless without errors.', 'success');
+          this.postCodeCorrectness(true);
+        }
+        return;
+      }
+
+      lastErrorOutput = result.output;
+
+      if (attempt === ObjectSpyPanel.MAX_VERIFY_ATTEMPTS) {
+        this.aiCodePanel.setVerifyStatus(
+          `Still failing after ${ObjectSpyPanel.MAX_VERIFY_ATTEMPTS} attempts: ${truncateForStatusLine(result.output)} ` +
+            `(full output in the softPlay Output channel — fix manually, or click Verify & Fix Code again).`,
+          'error'
+        );
+        return;
+      }
+
+      this.aiCodePanel.setVerifyStatus(`Attempt ${attempt} failed: ${truncateForStatusLine(result.output)} — asking the LLM to fix it…`, 'info');
+      const originalContext = await this.buildOriginalContextForFix(settings, isApiMode);
+      const fixPrompt = buildFixPrompt(
+        isApiMode ? readApiAutomationInstructions() : readSeniorQeInstructions(),
+        originalContext,
+        code,
+        result.output,
+        settings.language,
+        settings.automationMode
+      );
+      this.outputChannel.appendLine(
+        `Verify & Fix Code — sending fix request to Copilot model "${settings.copilotModelId}": prompt is ${fixPrompt.length} chars.`
+      );
+      this.aiCodePanel.startGenerating();
+      this.postAiCodeAvailable(false);
+      const cts = new vscode.CancellationTokenSource();
+      try {
+        const fixed = await this.streamCopilotResponse(fixPrompt, settings.copilotModelId, cts, (chunk) =>
+          this.aiCodePanel.appendChunk(chunk)
+        );
+        code = extractCodeBlock(fixed);
+        this.aiCodePanel.finish(code);
+        this.postAiCodeAvailable(true);
+      } catch (err) {
+        const message = err instanceof CopilotUnavailableError ? err.message : describeError(err);
+        this.outputChannel.appendLine(`Verify & Fix Code — Copilot fix request failed: ${message}`);
+        this.aiCodePanel.showError(message);
+        this.aiCodePanel.setVerifyStatus(`Could not get a fix from Copilot: ${message}`, 'error');
+        return;
+      } finally {
+        cts.dispose();
+      }
     }
   }
 
@@ -1321,8 +1570,11 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
 <body>
   <div class="toolbar-row title-row app-title-row">
     <span class="title-group">
-      <span class="title">TD Securities Agentic Test Automation</span>
-      <span id="versionBadge" class="version-badge">v${this.getVersion()}</span>
+      <span class="title-line">
+        <span class="title">TD Securities Agentic Test Automation</span>
+        <span id="versionBadge" class="version-badge">v${this.getVersion()}</span>
+      </span>
+      <span class="title-subtitle">LangChain-powered Agent</span>
     </span>
     <button id="settingsBtn" class="btn-icon-top" title="Settings (language, browser, GitHub Copilot)">⚙</button>
   </div>
@@ -1988,6 +2240,30 @@ function mapCodegenStatus(status: CodegenStatus): PanelStatus {
 
 function describeError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/** Bounds how much of a raw compiler/test-runner error goes into a modal
+ * confirmation dialog's `detail` text — a full multi-KB stack trace reads
+ * fine in the Output channel but would just be an unreadable wall of text
+ * in a small popup. Keeps the TAIL (same convention as
+ * execution/testExecutor.ts's own tailOutput()) since the actual failure
+ * reason is almost always at the end of compiler/test output, not the
+ * start. Always points to the Output channel for the untruncated version. */
+const MAX_DIALOG_ERROR_CHARS = 800;
+function truncateForDialog(output: string): string {
+  const trimmed = output.trim();
+  const body = trimmed.length > MAX_DIALOG_ERROR_CHARS ? `…${trimmed.slice(-MAX_DIALOG_ERROR_CHARS)}` : trimmed;
+  return `${body}\n\n(Full output is in the softPlay Output channel.)`;
+}
+
+/** Same idea as `truncateForDialog()` but for the AI Generated Code panel's
+ * one-line status text (see AiCodePanel.setVerifyStatus()) — collapsed to a
+ * single line and capped much shorter, so "Attempt 2 failed: <error>"
+ * reads as a status line, not a dumped stack trace. */
+const MAX_STATUS_LINE_ERROR_CHARS = 180;
+function truncateForStatusLine(output: string): string {
+  const singleLine = output.trim().replace(/\s+/g, ' ');
+  return singleLine.length > MAX_STATUS_LINE_ERROR_CHARS ? `…${singleLine.slice(-MAX_STATUS_LINE_ERROR_CHARS)}` : singleLine;
 }
 
 /** A short, concrete nudge toward the syntax that's actually idiomatic for

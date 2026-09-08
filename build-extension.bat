@@ -45,12 +45,17 @@ call node scripts\bump-version.js
 if errorlevel 1 goto :fail
 
 echo.
-echo [3/4] Compiling TypeScript...
+echo [3/5] Compiling TypeScript...
 call npm run compile
 if errorlevel 1 goto :fail
 
 echo.
-echo [4/4] Packaging extension (vsce package)...
+echo [4/5] Running automated tests (Verify & Fix agent, security-critical path checks, ...)...
+call npm test
+if errorlevel 1 goto :fail
+
+echo.
+echo [5/5] Packaging extension (vsce package)...
 del /q *.vsix >nul 2>&1
 rem `npm run package` (not `npx vsce package`) -- its "package" script in
 rem package.json calls @vscode/vsce's own JS file directly via `node`

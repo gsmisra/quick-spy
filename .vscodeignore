@@ -1,11 +1,14 @@
 .vscode/**
 .vscode-test/**
 src/**
+test/**
+out-test/**
 **/*.ts
 **/*.map
 **/tsconfig.tsbuildinfo
 .gitignore
 tsconfig.json
+tsconfig.test.json
 scripts/**
 build-extension.bat
 *.vsix

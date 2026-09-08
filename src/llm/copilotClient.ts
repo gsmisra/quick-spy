@@ -31,7 +31,11 @@ export async function listCopilotModels(): Promise<CopilotModelInfo[]> {
   }
 }
 
-async function findModel(modelId: string): Promise<vscode.LanguageModelChat | undefined> {
+/** Exported for agent/verifyFixOrchestrator.ts, which needs the same
+ * "resolve this id, or fall back to whatever's first" resolution — the
+ * exact same model handle every other Copilot call in this extension uses,
+ * never a second/different resolution path. */
+export async function findModel(modelId: string): Promise<vscode.LanguageModelChat | undefined> {
   const models = await vscode.lm.selectChatModels({ vendor: 'copilot' });
   return models.find((m) => m.id === modelId) ?? models[0];
 }
