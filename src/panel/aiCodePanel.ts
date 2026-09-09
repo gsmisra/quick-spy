@@ -59,7 +59,14 @@ export class AiCodePanel implements vscode.Disposable {
      * which instructions are checked all take effect on the next click. */
     private readonly onRegenerate: () => void,
     /** "Verify & Fix Code" — see ObjectSpyPanel.verifyAndFixCode(). */
-    private readonly onVerify: () => void
+    private readonly onVerify: () => void,
+    /** Editor-tab title — defaults to the original "AI Generated Code" so
+     * every existing call site is unaffected. Total Agentic Mode
+     * (agentic/agenticModeController.ts) constructs its OWN separate
+     * instance of this class with a distinct title ("Agentic Mode — AI
+     * Generated Code") so its output never lands in, or gets confused
+     * with, standard mode's own panel/tab. */
+    private readonly panelTitle: string = 'AI Generated Code'
   ) {}
 
   isOpen(): boolean {
@@ -73,7 +80,7 @@ export class AiCodePanel implements vscode.Disposable {
     }
     this.panel = vscode.window.createWebviewPanel(
       'SoftPlayAiCode',
-      'AI Generated Code',
+      this.panelTitle,
       vscode.ViewColumn.Beside,
       {
         enableScripts: true,

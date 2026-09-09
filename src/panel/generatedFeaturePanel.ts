@@ -29,7 +29,13 @@ export class GeneratedFeaturePanel implements vscode.Disposable {
     /** "Regenerate" — re-runs feature-file generation with whatever the
      * Playwright Code editor's live content is right now (including any
      * manual edits) and whatever's currently in the chat composer. */
-    private readonly onRegenerate: () => void
+    private readonly onRegenerate: () => void,
+    /** Editor-tab title — defaults to the original "Generated Feature File"
+     * so every existing call site is unaffected. Total Agentic Mode
+     * (agentic/agenticModeController.ts) constructs its OWN separate
+     * instance with a distinct title so its output never lands in, or gets
+     * confused with, standard mode's own panel/tab. */
+    private readonly panelTitle: string = 'Generated Feature File'
   ) {}
 
   isOpen(): boolean {
@@ -43,7 +49,7 @@ export class GeneratedFeaturePanel implements vscode.Disposable {
     }
     this.panel = vscode.window.createWebviewPanel(
       'SoftPlayGeneratedFeature',
-      'Generated Feature File',
+      this.panelTitle,
       vscode.ViewColumn.Beside,
       {
         enableScripts: true,

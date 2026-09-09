@@ -17,6 +17,9 @@ import { encryptPasswordLiteralsInCode } from '../security/uiPasswordRedactor';
 import { runVerifyFixAgent } from '../agent/verifyFixOrchestrator';
 import { getOrBuildRagIndex } from '../rag/ragIndexer';
 import { retrieveRagMatches, formatRagPromptSection } from '../rag/ragRetriever';
+import { AgenticModeController } from '../agentic/agenticModeController';
+import { AgenticIngestionPanel } from './agenticIngestionPanel';
+import { getAgenticModeSidebarHtml } from './agenticModeSidebarView';
 
 type InboundMessage =
   | { type: 'start'; payload?: string }
@@ -36,7 +39,21 @@ type InboundMessage =
   | { type: 'setCopilotEnabled'; payload: boolean }
   | { type: 'browseApiFormFile'; payload: { rowId: number } }
   | { type: 'clearApiData' }
-  | { type: 'updateDraftContext'; payload: { code: string; customInstructions: string; selectedFiles: string[]; apiDetails?: ApiRequestDetails } };
+  | { type: 'updateDraftContext'; payload: { code: string; customInstructions: string; selectedFiles: string[]; apiDetails?: ApiRequestDetails } }
+  // Total Agentic Mode — routed straight to AgenticModeController/
+  // AgenticIngestionPanel (agentic/agenticModeController.ts,
+  // panel/agenticIngestionPanel.ts); ObjectSpyPanel itself never inspects
+  // their payloads beyond this dispatch, per this feature's "proper
+  // segregation" requirement.
+  | { type: 'agentic:ready' }
+  | { type: 'agentic:ingestFiles'; payload: { files: { fileName: string; base64: string }[] } }
+  | { type: 'agentic:openIngestionPanel' }
+  | { type: 'agentic:updateDraftInstructions'; payload: string }
+  | { type: 'agentic:refreshInstructionFiles' }
+  | { type: 'agentic:selectedInstructionFiles'; payload: string[] }
+  | { type: 'agentic:generateFeatureFile' }
+  | { type: 'agentic:generateCode' }
+  | { type: 'agentic:generateCsv' };
 
 /** Status shape the webview renders (status pill, Start/Stop enablement) —
  * translated 1:1 from CodegenStatus (see mapCodegenStatus()). Kept as its
@@ -176,10 +193,22 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
   // of log anyway.
   private readonly outputChannel = vscode.window.createOutputChannel('SoftPlay');
 
+  // Total Agentic Mode — a fully separate subsystem (own state, own
+  // panels, own LangChain chains; see agentic/agenticModeController.ts's
+  // doc comment). `agenticModeEnabledAtLastRender` lets the settings
+  // change handler below tell "the mode itself was just toggled" (which
+  // needs the sidebar's ENTIRE html swapped) apart from every other
+  // settings change (which doesn't).
+  private readonly agenticController: AgenticModeController;
+  private readonly agenticIngestionPanel: AgenticIngestionPanel;
+  private agenticModeEnabledAtLastRender = false;
+
   constructor(private readonly context: vscode.ExtensionContext, private readonly settingsStore: SettingsStore) {
     this.settingsPanel = new SettingsPanel(context, settingsStore);
     this.aiCodePanel = new AiCodePanel(context, () => void this.regenerateAiCode(), () => void this.verifyAndFixCode());
     this.generatedFeaturePanel = new GeneratedFeaturePanel(context, () => void this.regenerateFeatureFile());
+    this.agenticController = new AgenticModeController(context, settingsStore, () => this.webview, this.outputChannel);
+    this.agenticIngestionPanel = new AgenticIngestionPanel(context, this.agenticController);
     this.featureFilePanel = new FeatureFilePanel(
       (scenario) => {
         this.linkedScenario = scenario;
@@ -203,8 +232,38 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
         this.postCode(true);
       }),
       this.settingsStore.onChange((settings) => {
+        // "Total Agentic Mode" flipping on/off swaps the sidebar's ENTIRE
+        // html (getHtml() below) — a fundamentally different template/
+        // script, not something the normal per-field UI sync below can
+        // handle. Every other settings change re-renders in place, exactly
+        // as before this feature existed.
+        if (settings.agenticModeEnabled !== this.agenticModeEnabledAtLastRender) {
+          if (this.view) {
+            this.view.webview.html = this.getHtml(this.view.webview);
+            if (settings.agenticModeEnabled) {
+              this.agenticController.postFileList();
+              void this.agenticController.estimateTokens();
+            } else {
+              // The fresh copy of Standard mode's own html/main.js just
+              // replaced Agentic Mode's — it needs the exact same state
+              // sync a brand-new resolveWebviewView() would give it (see
+              // syncStandardModeState()'s own doc comment for why this is
+              // required, not optional).
+              this.syncStandardModeState();
+            }
+          }
+          if (!settings.agenticModeEnabled) {
+            this.agenticController.reset();
+          }
+          return;
+        }
+
         this.postCode();
         this.postCopilotEnabledState(settings.copilotEnabled);
+        if (settings.agenticModeEnabled) {
+          void this.agenticController.estimateTokens();
+          return;
+        }
         // Token Monitoring must react the moment the model (or language,
         // or automation mode) changes — each model reports its own real
         // context window, so switching models can turn a red bar green or
@@ -244,7 +303,23 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
       this.disposables
     );
 
-    // Sync current state into the freshly (re-)resolved webview.
+    this.syncStandardModeState();
+  }
+
+  /** Pushes every piece of state Standard mode's own webview (main.js)
+   * needs to render correctly into a FRESH copy of itself — required both
+   * when the view is (re-)resolved from scratch (VS Code recreating the
+   * webview's content after it was hidden) AND when switching back from
+   * Total Agentic Mode (whose own re-render branch in the settingsStore
+   * onChange handler below swaps `webview.html` back to this template).
+   * Skipping this after either kind of fresh render leaves main.js's
+   * client-side state at its hard-coded initial defaults — in particular
+   * "Custom Instructions & RAG Data" starts `hidden` in the raw HTML and
+   * ONLY main.js's `applyCopilotEnabledState()` (driven by the
+   * `copilotEnabledState` message this method sends) ever reveals it — so
+   * omitting this call was exactly the bug where that section stayed
+   * missing after switching back from Total Agentic Mode. */
+  private syncStandardModeState(): void {
     this.postStatus(mapCodegenStatus(this.codegenManager.getStatus()));
     this.postLinkedScenario();
     this.postFeatureFileAvailable(this.featureFilePanel.hasLinkedFile());
@@ -281,6 +356,8 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
     this.aiCodePanel.dispose();
     this.generatedFeaturePanel.dispose();
     this.featureFilePanel.dispose();
+    this.agenticIngestionPanel.dispose();
+    this.agenticController.dispose();
     this.outputChannel.dispose();
     this.disposables.forEach((d) => d.dispose());
   }
@@ -373,6 +450,44 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
           message.payload.selectedFiles,
           message.payload.apiDetails
         );
+        break;
+      case 'agentic:ready':
+        this.agenticController.postFileList();
+        void this.agenticController.estimateTokens();
+        break;
+      case 'agentic:ingestFiles': {
+        const result = await this.agenticController.ingestFiles(message.payload.files);
+        this.webview?.postMessage({ type: 'agentic:ingestResult', payload: result });
+        // Requirement: successfully ingesting files automatically opens the
+        // Ingestion Configuration panel showing what was just loaded — but
+        // only when at least one file actually made it in (a drop that was
+        // entirely rejected, e.g. a legacy .xls/.doc, has nothing to
+        // configure yet).
+        if (result.accepted.length > 0) {
+          this.agenticIngestionPanel.showAndRefresh();
+        }
+        break;
+      }
+      case 'agentic:openIngestionPanel':
+        this.agenticIngestionPanel.showAndRefresh();
+        break;
+      case 'agentic:updateDraftInstructions':
+        this.agenticController.updateDraftUserRequest(message.payload);
+        break;
+      case 'agentic:refreshInstructionFiles':
+        await this.agenticController.refreshInstructionFiles();
+        break;
+      case 'agentic:selectedInstructionFiles':
+        this.agenticController.setSelectedInstructionFiles(message.payload);
+        break;
+      case 'agentic:generateFeatureFile':
+        await this.agenticController.generateFeatureFile();
+        break;
+      case 'agentic:generateCode':
+        await this.agenticController.generateAutomationCode();
+        break;
+      case 'agentic:generateCsv':
+        await this.agenticController.generateTestCaseCsv();
         break;
     }
   }
@@ -1630,6 +1745,18 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
   }
 
   private getHtml(webview: vscode.Webview): string {
+    const settings = this.settingsStore.get();
+    this.agenticModeEnabledAtLastRender = settings.agenticModeEnabled;
+    if (settings.agenticModeEnabled) {
+      return getAgenticModeSidebarHtml({
+        webview,
+        styleUri: webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'media', 'main.css')),
+        scriptUri: webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'media', 'agenticMode.js')),
+        nonce: getNonce(),
+        version: this.getVersion()
+      });
+    }
+
     const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'media', 'main.js'));
     const highlightUri = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'media', 'highlight.js'));
     const codeEditorUri = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'media', 'codeEditor.js'));

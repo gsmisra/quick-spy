@@ -34,6 +34,19 @@ export interface ObjectSpySettings {
    * zero prompt content, so this defaults to true rather than requiring an
    * extra step once a team actually populates the folder. */
   ragEnabled: boolean;
+  /** "Total Agentic Mode" — when true, the Control Panel sidebar swaps its
+   * normal Playwright-recording UI for the file-drop/ingestion-driven
+   * agentic workflow (see agentic/agenticModeController.ts): drop
+   * heterogeneous input files (requirements docs, data files, ...),
+   * configure how much of each to bring into context, then generate a
+   * feature file, automation code, and/or a Jira-importable manual
+   * test-case CSV — all still built from the SAME shared context sources
+   * (custom instruction files, RAG data, the chat box) as standard mode.
+   * Deliberately its own independent flag rather than a third
+   * `automationMode` value — `automationMode`/`language`/`languageVersion`
+   * still choose the generated automation code's flavor/target while this
+   * is on. */
+  agenticModeEnabled: boolean;
 }
 
 /**
@@ -54,7 +67,8 @@ const DEFAULTS: ObjectSpySettings = {
   automationMode: 'ui',
   copilotEnabled: false,
   copilotModelId: '',
-  ragEnabled: true
+  ragEnabled: true,
+  agenticModeEnabled: false
 };
 
 const STORAGE_KEY = 'objectSpy.settings';

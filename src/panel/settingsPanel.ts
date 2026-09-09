@@ -466,6 +466,23 @@ export class SettingsPanel implements vscode.Disposable {
     <span class="status-text" id="copilotStatusText"></span>
   </div>
 
+  <h2>Mode</h2>
+  <div class="field">
+    <label>
+      Total Agentic Mode
+      <span class="hint">
+        Swaps the Control Panel sidebar for a file-drop-driven workflow: ingest requirement/data files, then generate
+        a feature file, automation code, and/or a Jira-importable manual test-case CSV — all built from the same
+        ingested files plus your custom instructions and RAG data. Standard mode's own recording workflow is
+        untouched and always available by switching back.
+      </span>
+    </label>
+    <div class="radio-group">
+      <label><input type="radio" name="agenticModeEnabled" value="false" /> Standard</label>
+      <label><input type="radio" name="agenticModeEnabled" value="true" /> Total Agentic Mode</label>
+    </div>
+  </div>
+
   <h2>Reusable Components (RAG)</h2>
   <div class="field">
     <label>
@@ -525,6 +542,14 @@ export class SettingsPanel implements vscode.Disposable {
 
       document.getElementById('architectureLink').addEventListener('click', () => {
         vscode.postMessage({ type: 'openArchitectureDoc' });
+      });
+
+      document.querySelectorAll('input[name="agenticModeEnabled"]').forEach((radio) => {
+        radio.addEventListener('change', () => {
+          if (radio.checked) {
+            vscode.postMessage({ type: 'update', payload: { agenticModeEnabled: radio.value === 'true' } });
+          }
+        });
       });
 
       const ragEnabledToggle = document.getElementById('ragEnabledToggle');
@@ -804,6 +829,9 @@ export class SettingsPanel implements vscode.Disposable {
         languageSelect.value = settings.language;
         renderVersions(settings.language, settings.languageVersion);
         ragEnabledToggle.checked = settings.ragEnabled;
+        document.querySelectorAll('input[name="agenticModeEnabled"]').forEach((radio) => {
+          radio.checked = radio.value === String(settings.agenticModeEnabled);
+        });
 
         pendingModelId = settings.copilotModelId;
         copilotModelRow.classList.toggle('visible', settings.copilotEnabled);

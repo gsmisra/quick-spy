@@ -28,24 +28,24 @@ rem node_modules is left alone, so this doesn't slow down every build.
 if exist node_modules (
   if not exist "node_modules\@vscode\vsce\vsce" (
     echo.
-    echo [0/4] node_modules looks incomplete/corrupted ^(missing @vscode/vsce^) -- reinstalling from scratch...
+    echo [0/6] node_modules looks incomplete/corrupted ^(missing @vscode/vsce^) -- reinstalling from scratch...
     rmdir /s /q node_modules
     del /q package-lock.json >nul 2>&1
   )
 )
 
 echo.
-echo [1/4] Installing dependencies (npm install)...
+echo [1/6] Installing dependencies (npm install)...
 call npm install
 if errorlevel 1 goto :fail
 
 echo.
-echo [2/4] Bumping build number...
+echo [2/6] Bumping build number...
 call node scripts\bump-version.js
 if errorlevel 1 goto :fail
 
 echo.
-echo [3/5] Compiling TypeScript...
+echo [3/6] Compiling TypeScript...
 call npm run compile
 if errorlevel 1 goto :fail
 
@@ -55,12 +55,12 @@ rem command separator (e.g. "Verify & Fix" silently splits into two
 rem commands, the second one failing with "'Fix' is not recognized...") --
 rem spell it out ("and") rather than escaping ("^&"), so a future edit here
 rem doesn't reintroduce the same trap by typing a plain "&".
-echo [4/5] Running automated tests (Verify and Fix agent, security-critical path checks, ...)...
+echo [4/6] Running automated tests (Verify and Fix agent, security-critical path checks, ...)...
 call npm test
 if errorlevel 1 goto :fail
 
 echo.
-echo [5/5] Packaging extension (vsce package)...
+echo [5/6] Packaging extension (vsce package)...
 del /q *.vsix >nul 2>&1
 rem `npm run package` (not `npx vsce package`) -- its "package" script in
 rem package.json calls @vscode/vsce's own JS file directly via `node`
@@ -75,6 +75,20 @@ rem build, which is both slow and (on a locked-down/AV-monitored machine)
 rem prone to failing outright when npx tries to clean up that temporary
 rem install afterward.
 call npm run package
+if errorlevel 1 goto :fail
+
+echo.
+rem `vsce package` exiting 0 does NOT guarantee the .vsix it wrote is
+rem actually complete -- this package bundles the full `playwright`
+rem dependency and regularly comes out ~100MB+, so an interrupted process
+rem (closed terminal, antivirus interference, sleep, OOM) can leave a
+rem plausible-sized but TRUNCATED file on disk with `vsce` itself never
+rem reporting an error. That surfaced for real as "End of central
+rem directory record signature not found" when someone tried to install a
+rem build like that on a different machine -- this step catches it here,
+rem at build time, instead.
+echo [6/6] Verifying the packaged .vsix is a complete, valid zip...
+call node scripts\verify-vsix.js
 if errorlevel 1 goto :fail
 
 echo.
