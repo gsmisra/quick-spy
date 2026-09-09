@@ -67,6 +67,56 @@ test('retrieves the relevant recipe for a matching scenario and filters by mode/
   assert.equal(matches[0].id, 'postgres-query-and-validate');
 });
 
+test('a recipe wrongly tagged for the OTHER automation mode still surfaces when its content is a strong match (the bug this fixes)', async () => {
+  // Mirrors the real failure: "Generate RAG Corpus format" guesses
+  // automationMode per file, in isolation, with no idea how it'll later be
+  // searched — a shared DB utility easily gets tagged 'api'-only even
+  // though a UI Automation scenario legitimately needs to validate a DB
+  // value too. Before this fix, automationMode was a HARD filter, so this
+  // recipe was excluded entirely (zero matches) despite an exact folder-
+  // name + title match — the "RAG clearly has the right file but never
+  // uses it" bug report this test locks in the fix for.
+  const cassandraRecipe = makeRecipe({
+    id: 'csql',
+    title: 'Query Cassandra and validate a value',
+    body: '```java\nvar row = CassandraHelper.queryOne(session, cql, id);\n```',
+    tags: ['cassandra', 'database', 'query'],
+    automationMode: ['api'], // mis-tagged relative to how it's about to be used
+    language: ['java'],
+    relativePath: 'bigdata/src/main/java/com/td/tds/tcoe/automation/cassandra/csql.md'
+  });
+  const index = await buildRagIndex([cassandraRecipe, SCREENSHOT_RECIPE]);
+  const matches = await retrieveRagMatches(
+    index,
+    'Verify all the details validated on the UI page are also validated in this cassandra table, write a query to validate the table',
+    'java',
+    'ui' // the mode this recipe was NOT tagged for
+  );
+  assert.ok(matches.some((m) => m.id === 'csql'), 'expected the mode-mismatched-but-highly-relevant cassandra recipe to still surface');
+});
+
+test('a correctly-moded recipe still outranks an equally content-relevant, wrongly-moded one', async () => {
+  const uiTaggedCassandra = makeRecipe({
+    id: 'csql-ui-tagged',
+    title: 'Query Cassandra and validate a value',
+    body: '```java\nvar row = CassandraHelper.queryOne(session, cql, id);\n```',
+    tags: ['cassandra', 'database', 'query'],
+    automationMode: ['ui'],
+    language: ['java']
+  });
+  const apiTaggedCassandra = makeRecipe({
+    id: 'csql-api-tagged',
+    title: 'Query Cassandra and validate a value',
+    body: '```java\nvar row = CassandraHelper.queryOne(session, cql, id);\n```',
+    tags: ['cassandra', 'database', 'query'],
+    automationMode: ['api'],
+    language: ['java']
+  });
+  const index = await buildRagIndex([uiTaggedCassandra, apiTaggedCassandra]);
+  const matches = await retrieveRagMatches(index, 'connect to cassandra and validate a value', 'java', 'ui');
+  assert.equal(matches[0].id, 'csql-ui-tagged', 'the correctly-moded recipe should still rank first when content relevance is otherwise identical');
+});
+
 test('a recipe restricted to a different language never appears even if the text scores well', async () => {
   const index = await buildRagIndex([POSTGRES_RECIPE, SCREENSHOT_RECIPE]);
   // Same query, but asking for python/ui — postgres recipe is java/api only.

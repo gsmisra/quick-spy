@@ -795,7 +795,7 @@
       <div class="card tight">
         <span class="tag">Retrieval</span>
         <h3><code>ragRetriever.ts</code></h3>
-        <p>Runs the search and formats the prompt section — filtered by the current target language AND automation mode, so a Python-only helper never shows up while generating Java, or vice versa.</p>
+        <p>Runs the search and formats the prompt section. Target <b>language is a hard filter</b> — a Python-only helper never shows up while generating Java, since the resulting code would be genuinely unusable. Automation mode is deliberately a <b>soft preference, not a filter</b> — a recipe tagged for the "wrong" mode (a per-file guess made in isolation when it was generated) can still surface for a strongly-relevant match instead of being silently excluded outright.</p>
       </div>
     </div>
 
@@ -816,7 +816,7 @@
         </div>
         <div class="arrow-down">▼</div>
         <div class="row">
-          <div class="node fs"><b>.github/rag/*.md searched, recursively</b><span>brute-force cosine similarity over title + tags + body + each recipe's own folder/subfolder/filename, filtered by language + automation mode</span></div>
+          <div class="node fs"><b>.github/rag/*.md searched, recursively</b><span>brute-force cosine similarity over title + tags + body + each recipe's own folder/subfolder/filename — hard-filtered by language, soft-scored by automation mode (a mode mismatch lowers the score, it doesn't exclude the recipe)</span></div>
         </div>
         <div class="arrow-down">▼</div>
         <div class="row">
@@ -857,7 +857,7 @@
     <h2 class="inline-h">Quality &amp; testing</h2>
     <div class="card">
       <div class="grid cols-4">
-        <div class="card tight"><span class="tag">146/146 passing</span><p>Every RAG module added its own tests to the existing offline suite — <code>node --test</code>, zero new test-framework dependency.</p></div>
+        <div class="card tight"><span class="tag">148/148 passing</span><p>Every RAG module added its own tests to the existing offline suite — <code>node --test</code>, zero new test-framework dependency.</p></div>
         <div class="card tight"><span class="tag">Real scenario proven</span><p>The exact "login to Postgres, query a table, validate the result" example retrieves the right recipe — and only for the language/mode it applies to.</p></div>
         <div class="card tight"><span class="tag">Zero external services</span><p>No vector database, no FAISS, no model download — the whole pipeline is pure TypeScript arithmetic plus local file reads.</p></div>
         <div class="card tight"><span class="tag">Ships clean</span><p>Full compile and an actual <code>vsce package</code> both verified — the same discipline as every other feature on this page.</p></div>
@@ -950,7 +950,7 @@
 
     <h2 class="inline-h">Quality &amp; testing</h2>
     <div class="grid cols-3" style="margin-top:12px;">
-      <div class="card tight"><span class="tag">146/146 tests passing</span><p>Every new module — ingestion, xlsx/docx/pdf parsing, CSV generation — has its own offline unit tests, including real round-trips built with each library's own writer.</p></div>
+      <div class="card tight"><span class="tag">148/148 tests passing</span><p>Every new module — ingestion, xlsx/docx/pdf parsing, CSV generation — has its own offline unit tests, including real round-trips built with each library's own writer.</p></div>
       <div class="card tight"><span class="tag">Fixed a real Node-version bug</span><p><code>pdfjs-dist</code> needs ES2024's <code>Promise.withResolvers</code> — missing on some older bundled Node versions. A small ponyfill (installed only if genuinely missing) fixed a real crash found on a colleague's machine.</p></div>
       <div class="card tight"><span class="tag">Ships clean</span><p>Full compile and an actual <code>vsce package</code> both verified after every change — the same discipline as every other feature on this page.</p></div>
     </div>
@@ -1088,7 +1088,7 @@
       <tr><td>rag/ragTypes.ts, ragFrontmatter.ts</td><td>The reusable-component recipe schema (Zod) and <code>.github/rag/*.md</code> parse/serialize logic.</td></tr>
       <tr><td>rag/tfidfEmbeddings.ts, flatVectorStore.ts</td><td>A local, zero-dependency LangChain <code>Embeddings</code> + <code>VectorStore</code> pair — TF-IDF plus brute-force cosine similarity, no external vector DB or FAISS.</td></tr>
       <tr><td>rag/ragIndexBuilder.ts, ragIndexer.ts</td><td>Builds and mtime-caches the RAG index from <code>.github/rag/*.md</code>.</td></tr>
-      <tr><td>rag/ragRetriever.ts</td><td>Retrieves and formats the "Reusable components available" prompt section, filtered by language/automation mode.</td></tr>
+      <tr><td>rag/ragRetriever.ts</td><td>Retrieves and formats the "Reusable components available" prompt section — hard-filtered by language, soft-scored (not excluded) by automation mode.</td></tr>
       <tr><td>rag/ragCorpusGenerator.ts, ragRecipeNormalizer.ts</td><td>"Generate RAG Corpus format" (Settings) — turns an uploaded file into a recipe via Copilot, with a schema-valid fallback if the model's output doesn't parse.</td></tr>
     </table>
   </div>
