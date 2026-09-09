@@ -16,7 +16,7 @@ import * as secretVault from '../security/secretVault';
 import { encryptPasswordLiteralsInCode } from '../security/uiPasswordRedactor';
 import { runVerifyFixAgent } from '../agent/verifyFixOrchestrator';
 import { getOrBuildRagIndex } from '../rag/ragIndexer';
-import { retrieveRagMatches, formatRagPromptSection } from '../rag/ragRetriever';
+import { retrieveRagMatches, formatRagPromptSection, RagMatch } from '../rag/ragRetriever';
 import { AgenticModeController } from '../agentic/agenticModeController';
 import { AgenticIngestionPanel } from './agenticIngestionPanel';
 import { getAgenticModeSidebarHtml } from './agenticModeSidebarView';
@@ -609,7 +609,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
     // ENC[v1:...] token plus its decrypt helper is a different length than
     // the raw plaintext it replaces).
     const measuredCode = isApiMode ? playwrightCode : (await encryptPasswordLiteralsInCode(this.context, playwrightCode, settings.language)).code;
-    const ragSection = await this.buildRagSection(settings, isApiMode, measuredCode, apiDetails, customInstructions);
+    const { section: ragSection } = await this.buildRagSection(settings, isApiMode, measuredCode, apiDetails, customInstructions);
     const prompt = isApiMode
       ? await buildApiLlmPrompt(
           settings.language,
@@ -1441,7 +1441,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
       playwrightCode = redacted.code;
       encryptedCount = redacted.count;
     }
-    const ragSection = await this.buildRagSection(settings, isApiMode, playwrightCode, apiDetails, customInstructions);
+    const { section: ragSection, matches: ragMatches } = await this.buildRagSection(settings, isApiMode, playwrightCode, apiDetails, customInstructions);
     const prompt = isApiMode
       ? await buildApiLlmPrompt(
           settings.language,
@@ -1487,7 +1487,8 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
     try {
       const accumulated = await this.streamCopilotResponse(prompt, settings.copilotModelId, cts, (chunk) => this.postLlmChunk(chunk));
       this.outputChannel.appendLine(`Copilot response received: ${accumulated.length} chars.`);
-      this.postLlmDone(extractCodeBlock(accumulated));
+      const finalCode = prependRagTraceabilityBanner(extractCodeBlock(accumulated), ragMatches, settings.language);
+      this.postLlmDone(finalCode);
       void this.recordReceivedTokens(accumulated, settings.copilotModelId);
     } catch (err) {
       if (cts.token.isCancellationRequested) {
@@ -1674,19 +1675,20 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
     playwrightCode: string,
     apiDetails: ApiRequestDetails | undefined,
     customInstructions: string
-  ): Promise<string> {
+  ): Promise<{ section: string; matches: RagMatch[] }> {
+    const empty = { section: '', matches: [] as RagMatch[] };
     if (!settings.ragEnabled) {
-      return '';
+      return empty;
     }
     const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri;
     if (!workspaceRoot) {
-      return '';
+      return empty;
     }
     const index = await getOrBuildRagIndex(workspaceRoot, (message) =>
       this.outputChannel.appendLine(`Reusable components (RAG): ${message}`)
     );
     if (!index) {
-      return '';
+      return empty;
     }
     const queryText = [
       this.linkedScenario?.rawText,
@@ -1702,7 +1704,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
         `Reusable components (RAG): matched ${matches.length} of ${index.recipes.length} indexed — ${matches.map((m) => m.id).join(', ')}.`
       );
     }
-    return formatRagPromptSection(matches, settings.language);
+    return { section: formatRagPromptSection(matches, settings.language), matches };
   }
 
   private async readInstructionFiles(relPaths: string[]): Promise<{ path: string; content: string }[]> {
@@ -2553,6 +2555,35 @@ function describeError(err: unknown): string {
 function isEmptyModelResponseError(message: string): boolean {
   const normalized = message.toLowerCase();
   return normalized.includes('no choices') || normalized.includes('empty response') || normalized.includes('no completion');
+}
+
+/**
+ * Deterministic RAG traceability — prepended to the FINAL generated code
+ * ourselves, never left to the model's own compliance with the
+ * "add a comment" instruction in formatRagPromptSection() (see that
+ * instruction's own doc comment — this banner is the guarantee; the
+ * inline comment the model is asked to add near each actual call site is
+ * a best-effort improvement on TOP of this, not a substitute for it).
+ * Lists every recipe that was actually retrieved and injected into the
+ * prompt for this exact generation, each traced back to its real
+ * `.github/rag/` file — so "was RAG actually used, and where did it come
+ * from" is answerable by reading the top of the generated file, not by
+ * trusting the model remembered to say so. A no-op (returns `code`
+ * unchanged) when no RAG components were matched — a request RAG had
+ * nothing to offer for costs nothing extra here either.
+ */
+function prependRagTraceabilityBanner(code: string, matches: RagMatch[], language: 'java' | 'python'): string {
+  if (matches.length === 0) {
+    return code;
+  }
+  const c = language === 'python' ? '#' : '//';
+  const banner = [
+    `${c} ── RAG-matched reusable component(s) referenced in this generation ──`,
+    ...matches.map((m) => `${c} - "${m.title}" (id: ${m.id}) — from ${vscode.workspace.asRelativePath(m.filePath)}`),
+    `${c} ────────────────────────────────────────────────────────────────────`,
+    ''
+  ].join('\n');
+  return banner + code;
 }
 
 /** Bounds how much of a raw compiler/test-runner error goes into a modal

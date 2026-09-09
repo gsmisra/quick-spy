@@ -26,6 +26,12 @@ export interface RagRecipeMetadata extends Record<string, unknown> {
   language: string[];
   imports?: { java?: string[]; python?: string[] };
   recipeIndex: number;
+  /** The recipe's own source file path (see RagRecipe.filePath) — carried
+   * through the vector store into every RagMatch so a caller can point a
+   * user at EXACTLY which `.github/rag/*.md` file a piece of generated
+   * code was traced back to (see ragRetriever.ts's RagMatch and
+   * objectSpyPanel.ts's RAG traceability banner). */
+  filePath: string;
 }
 
 export async function buildRagIndex(recipes: RagRecipe[]): Promise<RagIndex> {
@@ -41,7 +47,8 @@ export async function buildRagIndex(recipes: RagRecipe[]): Promise<RagIndex> {
       automationMode: recipe.frontmatter.automationMode,
       language: recipe.frontmatter.language,
       imports: recipe.frontmatter.imports,
-      recipeIndex: index
+      recipeIndex: index,
+      filePath: recipe.filePath
     };
     return new Document({ pageContent: recipe.body, metadata });
   });

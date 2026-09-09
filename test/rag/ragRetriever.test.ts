@@ -79,6 +79,17 @@ test('an empty query string returns no matches', async () => {
   assert.equal(matches.length, 0);
 });
 
+test('every match carries the recipe\'s own source file path, for traceability', async () => {
+  const index = await buildRagIndex([POSTGRES_RECIPE, SCREENSHOT_RECIPE]);
+  const matches = await retrieveRagMatches(
+    index,
+    'Login to Postgres database, query a specific table using a query, validate the result',
+    'java',
+    'api'
+  );
+  assert.equal(matches[0].filePath, '/fake/.github/rag/postgres-query-and-validate.md');
+});
+
 test('formatRagPromptSection returns an empty string for no matches (zero prompt cost)', () => {
   assert.equal(formatRagPromptSection([], 'java'), '');
 });
@@ -86,8 +97,22 @@ test('formatRagPromptSection returns an empty string for no matches (zero prompt
 test('formatRagPromptSection includes the title, body, and de-duplicated imports for the target language', () => {
   const section = formatRagPromptSection(
     [
-      { id: 'a', title: 'Helper A', body: 'code A', imports: { java: ['com.acme.A', 'com.acme.Shared'] }, score: 0.9 },
-      { id: 'b', title: 'Helper B', body: 'code B', imports: { java: ['com.acme.Shared'] }, score: 0.5 }
+      {
+        id: 'a',
+        title: 'Helper A',
+        body: 'code A',
+        imports: { java: ['com.acme.A', 'com.acme.Shared'] },
+        score: 0.9,
+        filePath: '/fake/.github/rag/a.md'
+      },
+      {
+        id: 'b',
+        title: 'Helper B',
+        body: 'code B',
+        imports: { java: ['com.acme.Shared'] },
+        score: 0.5,
+        filePath: '/fake/.github/rag/b.md'
+      }
     ],
     'java'
   );
@@ -104,7 +129,7 @@ test('formatRagPromptSection includes the title, body, and de-duplicated imports
 
 test('formatRagPromptSection omits python imports when formatting for java', () => {
   const section = formatRagPromptSection(
-    [{ id: 'a', title: 'Helper A', body: 'code A', imports: { python: ['testutil.a'] }, score: 0.9 }],
+    [{ id: 'a', title: 'Helper A', body: 'code A', imports: { python: ['testutil.a'] }, score: 0.9, filePath: '/fake/.github/rag/a.md' }],
     'java'
   );
   assert.doesNotMatch(section, /testutil\.a/);
@@ -112,14 +137,38 @@ test('formatRagPromptSection omits python imports when formatting for java', () 
 
 test('formatRagPromptSection truncates an unusually large recipe body rather than injecting it whole', () => {
   const hugeBody = 'x'.repeat(10_000);
-  const section = formatRagPromptSection([{ id: 'huge', title: 'Huge Helper', body: hugeBody, score: 0.9 }], 'java');
+  const section = formatRagPromptSection(
+    [{ id: 'huge', title: 'Huge Helper', body: hugeBody, score: 0.9, filePath: '/fake/.github/rag/huge.md' }],
+    'java'
+  );
   assert.ok(section.length < hugeBody.length, 'the section should be meaningfully smaller than the raw oversized body');
   assert.match(section, /truncated/);
 });
 
 test('formatRagPromptSection leaves a normally-sized recipe body completely untouched', () => {
   const normalBody = '```java\nvar row = PostgresHelper.queryOne(conn, sql, id);\n```';
-  const section = formatRagPromptSection([{ id: 'a', title: 'Helper A', body: normalBody, score: 0.9 }], 'java');
+  const section = formatRagPromptSection(
+    [{ id: 'a', title: 'Helper A', body: normalBody, score: 0.9, filePath: '/fake/.github/rag/a.md' }],
+    'java'
+  );
   assert.match(section, /PostgresHelper\.queryOne/);
   assert.doesNotMatch(section, /truncated/);
+});
+
+test('formatRagPromptSection shows just the source FILENAME (never the full local path) for each recipe', () => {
+  const section = formatRagPromptSection(
+    [{ id: 'postgres-query-and-validate', title: 'Helper', body: 'code', score: 0.9, filePath: '/Users/dev/project/.github/rag/postgres-query-and-validate.md' }],
+    'java'
+  );
+  assert.match(section, /postgres-query-and-validate\.md/);
+  assert.doesNotMatch(section, /\/Users\/dev\/project/);
+});
+
+test('formatRagPromptSection instructs the model to add a traceability comment referencing the id and source file', () => {
+  const section = formatRagPromptSection(
+    [{ id: 'postgres-query-and-validate', title: 'Helper', body: 'code', score: 0.9, filePath: '/fake/.github/rag/postgres-query-and-validate.md' }],
+    'java'
+  );
+  assert.match(section, /RAG match:/);
+  assert.match(section, /TRACEABILITY/i);
 });
