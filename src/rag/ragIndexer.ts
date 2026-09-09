@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
 import { parseRagFile } from './ragFrontmatter';
 import { RagRecipe } from './ragTypes';
 import { buildRagIndex, RagIndex } from './ragIndexBuilder';
@@ -91,7 +92,13 @@ export async function getOrBuildRagIndex(workspaceRoot: vscode.Uri, onWarn?: (me
       onWarn?.(`Skipping ${uri.fsPath} — ${parsed.error}`);
       continue;
     }
-    recipes.push({ filePath: uri.fsPath, frontmatter: parsed.value.frontmatter, body: parsed.value.body, mtimeMs });
+    // Relative to the .github/rag/ folder itself (see RagRecipe's own doc
+    // comment for why NOT the full absolute machine path) — normalized to
+    // forward slashes so a recipe's own folder/file-name keywords match
+    // consistently regardless of whether this indexing ran on Windows or
+    // POSIX.
+    const relativePath = path.relative(folder.fsPath, uri.fsPath).split(path.sep).join('/');
+    recipes.push({ filePath: uri.fsPath, relativePath, frontmatter: parsed.value.frontmatter, body: parsed.value.body, mtimeMs });
   }
 
   if (recipes.length === 0) {

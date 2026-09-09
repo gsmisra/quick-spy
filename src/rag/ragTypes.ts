@@ -42,6 +42,20 @@ export interface RagRecipe {
    * vector store document id (stable across rebuilds as long as the file
    * isn't renamed). */
   filePath: string;
+  /** Path of `filePath` RELATIVE TO the `.github/rag/` folder itself
+   * (forward slashes always, regardless of OS) — e.g.
+   * "database/cassandra/cassandra-helper.md" for a recipe a project zip's
+   * own folder structure placed under a `database/cassandra/` subfolder
+   * (see rag/ragCorpusGenerator.ts's `ragTargetRelPath()`). Deliberately
+   * relative to the RAG folder, never the full absolute machine path —
+   * folding in someone's own local checkout path (username, project
+   * folder name, ...) would inject the SAME accidental tokens into every
+   * single recipe's embedding, quietly biasing every match toward
+   * whatever words happen to appear in that one machine's directory
+   * structure. Fed into `recipeToEmbeddingText()` below so a recipe is
+   * findable by its own folder/subfolder/file name, not just its title/
+   * tags/body content — see that function's own doc comment. */
+  relativePath: string;
   frontmatter: RagFrontmatter;
   /** Everything after the closing `---` — the human-readable description
    * plus fenced code block(s), included in the prompt verbatim when this
@@ -54,10 +68,23 @@ export interface RagRecipe {
 
 /** Text actually fed to the embedder for both indexing and querying — the
  * parts of a recipe most likely to line up with how a scenario/prompt
- * describes what it needs (title + tags carry the most signal for a short,
+ * describes what it needs. Title + tags carry the most signal for a short,
  * curated corpus; the body is included too so a description phrase like
- * "opens a database connection" still matches even if it wasn't tagged). */
+ * "opens a database connection" still matches even if it wasn't tagged;
+ * `relativePath` is included so a recipe organized into a meaningfully
+ * named folder/subfolder (e.g. "database/cassandra/...") or given a
+ * descriptive filename is ALSO findable by those words even if the exact
+ * same term never appears in the title/tags/body — e.g. a recipe filed
+ * under `database/cassandra/connection-helper.md` becomes matchable by a
+ * scenario that just says "connect to Cassandra", purely from its folder
+ * name, with zero change needed to the recipe's own content. The
+ * tokenizer (tfidfEmbeddings.ts) already splits on any non-alphanumeric
+ * character, so "database/cassandra/connection-helper.md" naturally
+ * yields the separate keywords "database", "cassandra", "connection",
+ * "helper" with no extra parsing needed here — this applies identically
+ * whether the recipe is later retrieved for UI or API Automation mode,
+ * since both share this exact same indexing/embedding pipeline. */
 export function recipeToEmbeddingText(recipe: RagRecipe): string {
   const { title, tags } = recipe.frontmatter;
-  return [title, tags.join(' '), recipe.body].join('\n');
+  return [title, tags.join(' '), recipe.relativePath, recipe.body].join('\n');
 }

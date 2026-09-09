@@ -770,7 +770,7 @@
       <div class="card tight">
         <span class="tag">Schema</span>
         <h3><code>ragTypes.ts</code></h3>
-        <p>The recipe schema — Zod-validated frontmatter (<code>id</code>, <code>title</code>, <code>tags</code>, <code>automationMode</code>, <code>language</code>, <code>imports</code>) every <code>.github/rag/*.md</code> file must satisfy.</p>
+        <p>The recipe schema — Zod-validated frontmatter (<code>id</code>, <code>title</code>, <code>tags</code>, <code>automationMode</code>, <code>language</code>, <code>imports</code>) every <code>.github/rag/*.md</code> file must satisfy. Matching text also folds in each recipe's own <b>folder, subfolder, and filename</b> (relative to <code>.github/rag/</code>) — a helper filed under <code>database/cassandra/connection-helper.md</code> is findable by "cassandra" alone, even if that word appears nowhere in its title, tags, or body.</p>
       </div>
       <div class="card tight">
         <span class="tag">Parsing</span>
@@ -816,7 +816,7 @@
         </div>
         <div class="arrow-down">▼</div>
         <div class="row">
-          <div class="node fs"><b>.github/rag/*.md searched</b><span>brute-force cosine similarity, filtered by language + automation mode</span></div>
+          <div class="node fs"><b>.github/rag/*.md searched, recursively</b><span>brute-force cosine similarity over title + tags + body + each recipe's own folder/subfolder/filename, filtered by language + automation mode</span></div>
         </div>
         <div class="arrow-down">▼</div>
         <div class="row">
@@ -827,6 +827,12 @@
           <div class="node cloud"><b>"Reusable components available" section injected</b><span>exact code + exact import statement, sent to Copilot</span></div>
         </div>
       </div>
+      <p class="note" style="margin-top:16px;margin-bottom:0;">
+        One shared pipeline for both automation modes — UI and API Automation build their query from the exact same
+        sources (linked scenario, chat box, recorded code/API request) and run through the exact same search, so a
+        recipe findable by its folder/filename works identically either way, with zero mode-specific logic to drift
+        out of sync.
+      </p>
     </div>
 
     <h2 class="inline-h">"Generate RAG Corpus format" — the one-stop onboarding step</h2>
@@ -851,7 +857,7 @@
     <h2 class="inline-h">Quality &amp; testing</h2>
     <div class="card">
       <div class="grid cols-4">
-        <div class="card tight"><span class="tag">65/65 passing</span><p>Every RAG module added its own tests to the existing offline suite — <code>node --test</code>, zero new test-framework dependency.</p></div>
+        <div class="card tight"><span class="tag">146/146 passing</span><p>Every RAG module added its own tests to the existing offline suite — <code>node --test</code>, zero new test-framework dependency.</p></div>
         <div class="card tight"><span class="tag">Real scenario proven</span><p>The exact "login to Postgres, query a table, validate the result" example retrieves the right recipe — and only for the language/mode it applies to.</p></div>
         <div class="card tight"><span class="tag">Zero external services</span><p>No vector database, no FAISS, no model download — the whole pipeline is pure TypeScript arithmetic plus local file reads.</p></div>
         <div class="card tight"><span class="tag">Ships clean</span><p>Full compile and an actual <code>vsce package</code> both verified — the same discipline as every other feature on this page.</p></div>
@@ -944,7 +950,7 @@
 
     <h2 class="inline-h">Quality &amp; testing</h2>
     <div class="grid cols-3" style="margin-top:12px;">
-      <div class="card tight"><span class="tag">138/138 tests passing</span><p>Every new module — ingestion, xlsx/docx/pdf parsing, CSV generation — has its own offline unit tests, including real round-trips built with each library's own writer.</p></div>
+      <div class="card tight"><span class="tag">146/146 tests passing</span><p>Every new module — ingestion, xlsx/docx/pdf parsing, CSV generation — has its own offline unit tests, including real round-trips built with each library's own writer.</p></div>
       <div class="card tight"><span class="tag">Fixed a real Node-version bug</span><p><code>pdfjs-dist</code> needs ES2024's <code>Promise.withResolvers</code> — missing on some older bundled Node versions. A small ponyfill (installed only if genuinely missing) fixed a real crash found on a colleague's machine.</p></div>
       <div class="card tight"><span class="tag">Ships clean</span><p>Full compile and an actual <code>vsce package</code> both verified after every change — the same discipline as every other feature on this page.</p></div>
     </div>

@@ -12,9 +12,16 @@ function makeRecipe(options: {
   automationMode?: RagRecipe['frontmatter']['automationMode'];
   language?: RagRecipe['frontmatter']['language'];
   imports?: RagRecipe['frontmatter']['imports'];
+  /** Defaults to a flat "<id>.md" at the rag root, matching every existing
+   * fixture's prior behavior — pass an explicit nested path (e.g.
+   * "database/cassandra/cassandra-helper.md") for tests specifically
+   * exercising folder/filename-based matching. */
+  relativePath?: string;
 }): RagRecipe {
+  const relativePath = options.relativePath ?? `${options.id}.md`;
   return {
-    filePath: `/fake/.github/rag/${options.id}.md`,
+    filePath: `/fake/.github/rag/${relativePath}`,
+    relativePath,
     mtimeMs: 0,
     frontmatter: {
       id: options.id,
@@ -77,6 +84,43 @@ test('an empty query string returns no matches', async () => {
   const index = await buildRagIndex([POSTGRES_RECIPE, SCREENSHOT_RECIPE]);
   const matches = await retrieveRagMatches(index, '   ', 'java', 'api');
   assert.equal(matches.length, 0);
+});
+
+const CASSANDRA_RECIPE_NO_MENTION_IN_CONTENT = makeRecipe({
+  id: 'connection-helper',
+  // Deliberately generic title/tags/body — NONE of them mention
+  // "cassandra" anywhere. Only the folder structure does.
+  title: 'Connection helper',
+  body: '```java\nvar row = ConnectionHelper.queryOne(session, cql, id);\n```',
+  tags: ['database', 'query'],
+  automationMode: ['ui', 'api'],
+  language: ['java'],
+  relativePath: 'database/cassandra/connection-helper.md'
+});
+
+test('a recipe is matchable purely by its FOLDER name, even when that word appears nowhere in title/tags/body', async () => {
+  const index = await buildRagIndex([CASSANDRA_RECIPE_NO_MENTION_IN_CONTENT, SCREENSHOT_RECIPE]);
+  const matches = await retrieveRagMatches(index, 'connect to cassandra and run a query', 'java', 'api');
+  assert.ok(matches.some((m) => m.id === 'connection-helper'), 'expected the folder-name "cassandra" alone to surface this recipe');
+});
+
+test('folder-name matching works identically for UI Automation mode as it does for API Automation mode', async () => {
+  const index = await buildRagIndex([CASSANDRA_RECIPE_NO_MENTION_IN_CONTENT, SCREENSHOT_RECIPE]);
+  const uiMatches = await retrieveRagMatches(index, 'connect to cassandra and run a query', 'java', 'ui');
+  assert.ok(uiMatches.some((m) => m.id === 'connection-helper'), 'the same folder-name match should surface for UI Automation mode too');
+});
+
+test('a recipe is matchable purely by its own FILENAME segment', async () => {
+  const namedRecipe = makeRecipe({
+    id: 'oauth-token-refresh',
+    title: 'Token utility',
+    body: '```java\nTokenUtil.get();\n```',
+    tags: [],
+    relativePath: 'auth/oauth-token-refresh.md'
+  });
+  const index = await buildRagIndex([namedRecipe, SCREENSHOT_RECIPE]);
+  const matches = await retrieveRagMatches(index, 'refresh the oauth token before the request', 'java', 'api');
+  assert.ok(matches.some((m) => m.id === 'oauth-token-refresh'), 'expected the filename words "oauth"/"token"/"refresh" alone to surface this recipe');
 });
 
 test('every match carries the recipe\'s own source file path, for traceability', async () => {
