@@ -26,6 +26,7 @@
   const codeBtn = document.getElementById('agenticCodeBtn');
   const csvBtn = document.getElementById('agenticCsvBtn');
   const csvStatus = document.getElementById('agenticCsvStatus');
+  const clearDataBtn = document.getElementById('agenticClearDataBtn');
 
   // ---- Token Monitoring (own copy — see file doc comment) ----
   const tokenBarFill = document.getElementById('tokenBarFill');
@@ -123,6 +124,23 @@
 
   manageFilesBtn.addEventListener('click', () => vscode.postMessage({ type: 'agentic:openIngestionPanel' }));
 
+  // "Clear Data" -- a genuine "start this batch of files over from
+  // nothing", matching Standard mode's own Clear Data/Kill All Browsers
+  // buttons: the extension host wipes every ingested file, cached parsed
+  // content, custom-instruction selection, and generated output
+  // (agentic/agenticModeController.ts's reset()); this click handler only
+  // resets what's purely client-side state here (the chat box text, the
+  // rejected-files list, the CSV status line) -- everything else arrives
+  // back via the 'agentic:fileList'/'agentic:promptFiles'/'tokenEstimate'
+  // messages reset() already sends.
+  clearDataBtn.addEventListener('click', () => {
+    chatInput.value = '';
+    csvStatus.hidden = true;
+    csvStatus.textContent = '';
+    renderRejected([]);
+    vscode.postMessage({ type: 'agentic:clearData' });
+  });
+
   function renderFileList(files) {
     fileCountLabel.textContent = files.length === 0 ? 'No files ingested yet.' : files.length + ' file(s) ingested.';
     manageFilesBtn.hidden = files.length === 0;
@@ -201,12 +219,32 @@
   });
 
   // ---- Generation actions ----
+  // Button LABELS flip between Generate/Start and View based on the
+  // 'agentic:generationState' message (see agentic/agenticModeController.ts's
+  // postGenerationState()) -- the click handler always posts the SAME
+  // message type either way; the extension host decides whether to run a
+  // fresh generation or just reveal what's already in memory (or, for CSV,
+  // reopen the file already written this session).
+  function applyGenerationState(payload) {
+    featureBtn.textContent = payload.hasFeatureFile ? 'View AI Feature File Generation' : 'Start AI Feature File Generation';
+    codeBtn.textContent = payload.hasCode ? 'View AI Code Generation' : 'Start AI Code Generation';
+    csvBtn.textContent = payload.hasCsv ? 'View Manual Test Cases in CSV' : 'Generate Manual Test Cases in CSV';
+    csvBtn.dataset.hasCsv = payload.hasCsv ? 'true' : 'false';
+  }
+
   featureBtn.addEventListener('click', () => vscode.postMessage({ type: 'agentic:generateFeatureFile' }));
   codeBtn.addEventListener('click', () => vscode.postMessage({ type: 'agentic:generateCode' }));
   csvBtn.addEventListener('click', () => {
-    csvStatus.hidden = false;
-    csvStatus.className = 'agentic-csv-status';
-    csvStatus.textContent = 'Generating manual test cases…';
+    // Only show the "Generating..." status when a generation is actually
+    // about to run -- reopening an existing CSV (dataset.hasCsv === 'true')
+    // is a near-instant file-open with no csvStatus message coming back at
+    // all, so showing this here would leave a misleading "Generating..."
+    // line stuck on screen forever after a View click.
+    if (csvBtn.dataset.hasCsv !== 'true') {
+      csvStatus.hidden = false;
+      csvStatus.className = 'agentic-csv-status';
+      csvStatus.textContent = 'Generating manual test cases…';
+    }
     vscode.postMessage({ type: 'agentic:generateCsv' });
   });
 
@@ -244,6 +282,9 @@
         break;
       case 'agentic:csvStatus':
         applyCsvStatus(message.payload);
+        break;
+      case 'agentic:generationState':
+        applyGenerationState(message.payload);
         break;
     }
   });

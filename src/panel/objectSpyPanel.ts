@@ -53,7 +53,8 @@ type InboundMessage =
   | { type: 'agentic:selectedInstructionFiles'; payload: string[] }
   | { type: 'agentic:generateFeatureFile' }
   | { type: 'agentic:generateCode' }
-  | { type: 'agentic:generateCsv' };
+  | { type: 'agentic:generateCsv' }
+  | { type: 'agentic:clearData' };
 
 /** Status shape the webview renders (status pill, Start/Stop enablement) —
  * translated 1:1 from CodegenStatus (see mapCodegenStatus()). Kept as its
@@ -242,6 +243,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
             this.view.webview.html = this.getHtml(this.view.webview);
             if (settings.agenticModeEnabled) {
               this.agenticController.postFileList();
+              this.agenticController.postGenerationState();
               void this.agenticController.estimateTokens();
             } else {
               // The fresh copy of Standard mode's own html/main.js just
@@ -453,6 +455,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
         break;
       case 'agentic:ready':
         this.agenticController.postFileList();
+        this.agenticController.postGenerationState();
         void this.agenticController.estimateTokens();
         break;
       case 'agentic:ingestFiles': {
@@ -488,6 +491,11 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
         break;
       case 'agentic:generateCsv':
         await this.agenticController.generateTestCaseCsv();
+        break;
+      case 'agentic:clearData':
+        this.agenticController.reset();
+        this.agenticIngestionPanel.refresh();
+        this.outputChannel.appendLine('Total Agentic Mode — Clear Data: every ingested file, cached parsed content, custom-instruction selection, chat text, and generated output has been reset.');
         break;
     }
   }

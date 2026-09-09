@@ -70,6 +70,9 @@ export function getAgenticModeSidebarHtml(params: {
   <details class="section" id="agenticIngestSection" open>
     <summary>Input Files</summary>
     <div class="section-body">
+      <div class="toolbar-row" style="justify-content: flex-end;">
+        <button id="agenticClearDataBtn" class="btn btn-danger clear-data-btn" title="Wipe every ingested file, cached parsed content, custom-instruction selection, chat text, and generated output — so nothing from this batch of files carries over into the next one">Clear Data</button>
+      </div>
       <p class="note" style="margin-top: 0;">
         Drop one or more requirement/data files (.csv, .json, .xml, .yml, .txt, .md, .log, .xlsx, .docx, .pdf).
         After ingesting, open Ingestion Configuration to choose exactly which sheet/columns/rows/lines of each file

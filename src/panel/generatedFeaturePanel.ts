@@ -42,6 +42,16 @@ export class GeneratedFeaturePanel implements vscode.Disposable {
     return this.panel !== undefined;
   }
 
+  /** Whether there's currently any generated feature file text in memory —
+   * mirrors AiCodePanel's own `hasCode()`. `show()` alone (no fresh
+   * generation) is enough to bring it back on screen even after the tab
+   * was closed, since `getHtml()` always re-renders from this same
+   * in-memory `featureText` — closing the tab only clears `this.panel`
+   * (see `onDidDispose` below), never the text itself. */
+  hasContent(): boolean {
+    return this.featureText.trim().length > 0;
+  }
+
   show(): void {
     if (this.panel) {
       this.panel.reveal(vscode.ViewColumn.Beside);

@@ -72,6 +72,11 @@ export class AgenticModeController implements vscode.Disposable {
   private selectedInstructionFiles: string[] = [];
   private lastReceivedTokens = 0;
   private tokenEstimateSeq = 0;
+  // The last CSV file this session actually wrote — "View Manual Test
+  // Cases in CSV" reopens exactly this file rather than regenerating (see
+  // generateTestCaseCsv()). undefined until the first successful CSV
+  // generation, and reset to undefined by reset()/Clear Data.
+  private lastCsvUri: vscode.Uri | undefined;
 
   // Fresh, independent panel instances — see class doc comment. Regenerate
   // simply re-runs the same action; Agentic Mode's own generation actions
@@ -90,8 +95,14 @@ export class AgenticModeController implements vscode.Disposable {
     private readonly getSidebarWebview: () => vscode.Webview | undefined,
     private readonly outputChannel: vscode.OutputChannel
   ) {
-    this.aiCodePanel = new AiCodePanel(context, () => void this.generateAutomationCode(), () => undefined, 'Agentic Mode — AI Generated Code');
-    this.generatedFeaturePanel = new GeneratedFeaturePanel(context, () => void this.generateFeatureFile(), 'Agentic Mode — Generated Feature File');
+    // The panel's OWN "Regenerate" button must always force a fresh
+    // generation — `true` bypasses the "already have content, just show
+    // it" short-circuit generateAutomationCode()/generateFeatureFile()
+    // apply for the SIDEBAR's own Start/View button (see their own doc
+    // comments below). Without this, clicking Regenerate on already-open
+    // content would silently do nothing, since content already exists.
+    this.aiCodePanel = new AiCodePanel(context, () => void this.generateAutomationCode(true), () => undefined, 'Agentic Mode — AI Generated Code');
+    this.generatedFeaturePanel = new GeneratedFeaturePanel(context, () => void this.generateFeatureFile(true), 'Agentic Mode — Generated Feature File');
   }
 
   dispose(): void {
@@ -105,19 +116,55 @@ export class AgenticModeController implements vscode.Disposable {
     this.generatedFeaturePanel.dispose();
   }
 
-  /** Wipes every ingested file (and everything derived from them) — called
-   * when Total Agentic Mode is turned off, so switching back to Standard
-   * mode and later back to Agentic mode starts from a clean slate rather
-   * than silently resurrecting a previous session's files. */
+  /**
+   * "Clear Data" (Agentic Mode's own sidebar button) AND the reset that
+   * runs automatically when Total Agentic Mode is turned off — the exact
+   * same "start completely over" guarantee Standard mode's own Clear Data/
+   * Kill All Browsers give: every ingested file's raw AND parsed content,
+   * every per-file ingestion config, the checked custom-instruction
+   * selection, the accumulated chat-box request, any in-flight generation,
+   * both owned result panels' content, and the Token Monitoring estimate
+   * are all wiped — nothing from this batch of files can leak into the
+   * next one. Mirrors ObjectSpyPanel.clearSharedLlmContext() scope-for-scope.
+   */
   reset(): void {
     this.codeCancellation?.cancel();
+    this.codeCancellation?.dispose();
+    this.codeCancellation = undefined;
     this.featureCancellation?.cancel();
+    this.featureCancellation?.dispose();
+    this.featureCancellation = undefined;
     this.csvCancellation?.cancel();
+    this.csvCancellation?.dispose();
+    this.csvCancellation = undefined;
+
+    // Dropping every reference to the Map's own AgenticIngestedFile entries
+    // (raw text AND any parsedXlsx/parsedDocx/parsedPdf structure) is what
+    // actually frees the in-memory content — clear() removes the only
+    // handles this controller was holding, so it becomes eligible for
+    // garbage collection immediately, not just logically "forgotten".
     this.files.clear();
     this.lastUserRequest = '';
-    this.lastReceivedTokens = 0;
     this.selectedInstructionFiles = [];
+
+    this.aiCodePanel.clear();
+    this.generatedFeaturePanel.clear();
+    this.lastCsvUri = undefined;
+    // Flips "View Manual Test Cases in CSV"/"View AI Feature File
+    // Generation"/"View AI Code Generation" back to their original
+    // Generate/Start labels now that there's nothing left to view.
+    this.postGenerationState();
+
+    this.lastReceivedTokens = 0;
+    this.tokenEstimateSeq++; // discard any in-flight estimate for the context just wiped
+    this.getSidebarWebview()?.postMessage({ type: 'tokenEstimate', payload: { available: false, reason: 'Cleared — nothing to estimate yet.' } });
+
     this.postFileList();
+    // Re-scanning also re-renders the sidebar's Custom Instructions
+    // checkboxes from scratch (unchecked by default) — the only way to
+    // clear THEIR visual state too, since the sidebar only re-renders that
+    // list from a fresh 'agentic:promptFiles' message, never on its own.
+    void this.refreshInstructionFiles();
   }
 
   // ------------------------------------------------------------------
@@ -262,6 +309,26 @@ export class AgenticModeController implements vscode.Disposable {
    * ever needs the lightweight metadata (`postFileList()` above). */
   getFiles(): AgenticIngestedFile[] {
     return Array.from(this.files.values());
+  }
+
+  /** Tells the sidebar whether each of the three "Generate"/"Start" buttons
+   * should read as "View ..." instead — i.e. whether that output already
+   * exists in memory (or, for CSV, was already written to disk this
+   * session) and a click should just SHOW it rather than run a fresh
+   * generation. Called after every successful generation, after
+   * `reset()`/Clear Data (flips every button back to its original label),
+   * and once on the sidebar's own 'agentic:ready' so a freshly (re-)loaded
+   * webview immediately shows the correct labels rather than defaulting to
+   * "Generate"/"Start" for output that's actually still sitting in memory. */
+  postGenerationState(): void {
+    this.getSidebarWebview()?.postMessage({
+      type: 'agentic:generationState',
+      payload: {
+        hasFeatureFile: this.generatedFeaturePanel.hasContent(),
+        hasCode: this.aiCodePanel.hasCode(),
+        hasCsv: this.lastCsvUri !== undefined
+      }
+    });
   }
 
   // ------------------------------------------------------------------
@@ -469,7 +536,23 @@ export class AgenticModeController implements vscode.Disposable {
     return model;
   }
 
-  async generateFeatureFile(): Promise<void> {
+  /** `forceRegenerate` — false (the default, used by the sidebar's own
+   * "Start AI Feature File Generation"/"View AI Feature File Generation"
+   * button) means: if a feature file is ALREADY sitting in memory from an
+   * earlier click this session, just reveal it again (`.show()`, no new
+   * LLM call, no re-run of anything) — the exact "reopen what I already
+   * generated" behavior AiCodePanel/GeneratedFeaturePanel already support
+   * (see GeneratedFeaturePanel.hasContent()'s own doc comment), just never
+   * reached before because this method always regenerated unconditionally.
+   * `true` (used ONLY by the panel's own internal "Regenerate" button —
+   * see the constructor) bypasses that check to force a genuinely fresh
+   * generation. */
+  async generateFeatureFile(forceRegenerate = false): Promise<void> {
+    if (!forceRegenerate && this.generatedFeaturePanel.hasContent()) {
+      this.generatedFeaturePanel.show();
+      return;
+    }
+
     const settings = this.settingsStore.get();
     this.featureCancellation?.cancel();
     this.featureCancellation?.dispose();
@@ -492,6 +575,7 @@ export class AgenticModeController implements vscode.Disposable {
         userRequest: this.lastUserRequest || '(No additional instructions were provided — use the ingested files and any custom instructions/RAG context above.)'
       });
       this.generatedFeaturePanel.finish(result.trim());
+      this.postGenerationState();
       void this.recordReceivedTokens(settings, result);
     } catch (err) {
       const message = err instanceof CopilotUnavailableError ? err.message : err instanceof Error ? err.message : String(err);
@@ -500,7 +584,14 @@ export class AgenticModeController implements vscode.Disposable {
     }
   }
 
-  async generateAutomationCode(): Promise<void> {
+  /** See generateFeatureFile()'s doc comment — identical `forceRegenerate`
+   * contract, just for "Start"/"View AI Code Generation". */
+  async generateAutomationCode(forceRegenerate = false): Promise<void> {
+    if (!forceRegenerate && this.aiCodePanel.hasCode()) {
+      this.aiCodePanel.show();
+      return;
+    }
+
     const settings = this.settingsStore.get();
     this.codeCancellation?.cancel();
     this.codeCancellation?.dispose();
@@ -529,6 +620,7 @@ export class AgenticModeController implements vscode.Disposable {
         userRequest: this.lastUserRequest || '(No additional instructions were provided — use the ingested files and any custom instructions/RAG context above.)'
       });
       this.aiCodePanel.finish(extractCodeBlock(result));
+      this.postGenerationState();
       void this.recordReceivedTokens(settings, result);
     } catch (err) {
       const message = err instanceof CopilotUnavailableError ? err.message : err instanceof Error ? err.message : String(err);
@@ -537,7 +629,29 @@ export class AgenticModeController implements vscode.Disposable {
     }
   }
 
-  async generateTestCaseCsv(): Promise<void> {
+  /** `forceRegenerate` — false (the sidebar's own button, "Generate"/"View
+   * Manual Test Cases in CSV") reopens the exact CSV file already written
+   * this session (`lastCsvUri`) with no new LLM call at all when one
+   * exists; `true` forces a genuinely fresh generation. Unlike the feature
+   * file/code chains, there's no separate "Regenerate" affordance for CSV
+   * today — the only way to force `true` is via a fresh generation after
+   * "Clear Data" resets `lastCsvUri` to undefined. */
+  async generateTestCaseCsv(forceRegenerate = false): Promise<void> {
+    if (!forceRegenerate && this.lastCsvUri) {
+      try {
+        const document = await vscode.workspace.openTextDocument(this.lastCsvUri);
+        await vscode.window.showTextDocument(document, { viewColumn: vscode.ViewColumn.Beside, preview: false });
+        return;
+      } catch {
+        // The file was moved/deleted outside SoftPlay since it was
+        // written — fall through and generate a fresh one rather than
+        // leaving the button permanently stuck on "View" with nothing to
+        // show.
+        this.lastCsvUri = undefined;
+        this.postGenerationState();
+      }
+    }
+
     const settings = this.settingsStore.get();
     this.csvCancellation?.cancel();
     this.csvCancellation?.dispose();
@@ -569,6 +683,8 @@ export class AgenticModeController implements vscode.Disposable {
       const fileName = `manual-test-cases-${timestampForFileName()}.csv`;
       const outUri = vscode.Uri.joinPath(outDir, fileName);
       await vscode.workspace.fs.writeFile(outUri, new TextEncoder().encode(normalized.content));
+      this.lastCsvUri = outUri;
+      this.postGenerationState();
 
       webview?.postMessage({
         type: 'agentic:csvStatus',
