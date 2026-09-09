@@ -14,6 +14,7 @@ import { ApiRequestDetails, SecretEncryptor, buildApiRequestSummary, hasApiReque
 import { readFileCachedSync, readWorkspaceFileCached } from '../cache/fileCache';
 import * as secretVault from '../security/secretVault';
 import { encryptPasswordLiteralsInCode } from '../security/uiPasswordRedactor';
+import { encryptCredentialsInFreeText } from '../security/chatInstructionRedactor';
 import { runVerifyFixAgent } from '../agent/verifyFixOrchestrator';
 import { getOrBuildRagIndex } from '../rag/ragIndexer';
 import { retrieveRagMatches, formatRagPromptSection, RagMatch } from '../rag/ragRetriever';
@@ -609,7 +610,11 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
     // ENC[v1:...] token plus its decrypt helper is a different length than
     // the raw plaintext it replaces).
     const measuredCode = isApiMode ? playwrightCode : (await encryptPasswordLiteralsInCode(this.context, playwrightCode, settings.language)).code;
-    const { section: ragSection } = await this.buildRagSection(settings, isApiMode, measuredCode, apiDetails, customInstructions);
+    // Same free-text redaction pass runLlmRefinement() applies for a real
+    // send (see chatInstructionRedactor.ts) — measuring the un-redacted
+    // chat text would under/over-count relative to what's actually sent.
+    const measuredCustomInstructions = (await encryptCredentialsInFreeText(this.context, customInstructions)).text;
+    const { section: ragSection } = await this.buildRagSection(settings, isApiMode, measuredCode, apiDetails, measuredCustomInstructions);
     const prompt = isApiMode
       ? await buildApiLlmPrompt(
           settings.language,
@@ -617,7 +622,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
           builtIn,
           instructions,
           apiDetails!,
-          customInstructions,
+          measuredCustomInstructions,
           this.getEncryptSecret(),
           ragSection,
           this.linkedScenario,
@@ -630,7 +635,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
           builtIn,
           instructions,
           measuredCode,
-          customInstructions,
+          measuredCustomInstructions,
           ragSection,
           this.linkedScenario,
           this.currentSuggestedBaseName()
@@ -864,16 +869,19 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
     if (!isApiMode) {
       playwrightCode = (await encryptPasswordLiteralsInCode(this.context, playwrightCode, settings.language)).code;
     }
+    // Same free-text chat-box redaction as runLlmRefinement() — see
+    // security/chatInstructionRedactor.ts.
+    customInstructions = (await encryptCredentialsInFreeText(this.context, customInstructions.trim())).text;
     const prompt = isApiMode
       ? await buildApiFeatureFilePrompt(
           builtIn,
           (apiDetails ?? this.lastApiRequestDetails)!,
-          customInstructions.trim(),
+          customInstructions,
           settings.language,
           this.getEncryptSecret(),
           this.linkedScenario
         )
-      : buildFeatureFilePrompt(builtIn, playwrightCode, customInstructions.trim());
+      : buildFeatureFilePrompt(builtIn, playwrightCode, customInstructions);
     this.outputChannel.appendLine(
       `Sending to Copilot model "${settings.copilotModelId}" for feature-file generation (${isApiMode ? 'API' : 'UI'} mode): ` +
         `${builtIn ? `instructions (${builtIn.length} chars)` : '(MISSING — prompts/generate-feature-file.md failed to load)'} — ` +
@@ -1441,6 +1449,14 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
       playwrightCode = redacted.code;
       encryptedCount = redacted.count;
     }
+    // Same guarantee, extended to the free-text "Instant instructions to
+    // LLM" chat box — see security/chatInstructionRedactor.ts's own doc
+    // comment for why this was a real gap (a connection string or
+    // "password: ..." typed directly into chat previously reached Copilot
+    // completely in plaintext, in BOTH automation modes).
+    const chatRedaction = await encryptCredentialsInFreeText(this.context, customInstructions);
+    customInstructions = chatRedaction.text;
+    encryptedCount += chatRedaction.count;
     const { section: ragSection, matches: ragMatches } = await this.buildRagSection(settings, isApiMode, playwrightCode, apiDetails, customInstructions);
     const prompt = isApiMode
       ? await buildApiLlmPrompt(

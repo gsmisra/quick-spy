@@ -5,6 +5,7 @@ import { listCopilotModels } from '../llm/copilotClient';
 import { generateRagCorpus, GenerationProgress, UploadedFile } from '../rag/ragCorpusGenerator';
 import { unzip } from '../rag/zipReader';
 import { isNoiseDirectoryPath, isSupportedRagSourceFile } from '../rag/ragUploadFilters';
+import { getSecretEnv, SECRET_ENV_VAR } from '../security/secretVault';
 
 /** Same per-file cap the drop zone enforces for a directly-dropped file
  * (settingsPanel.ts webview script's RAG_MAX_FILE_BYTES) — applied again
@@ -18,7 +19,8 @@ type InboundMessage =
   | { type: 'listModels' }
   | { type: 'openArchitectureDoc' }
   | { type: 'generateRagCorpus'; payload: { files: UploadedFile[] } }
-  | { type: 'expandRagZip'; payload: { fileName: string; base64: string } };
+  | { type: 'expandRagZip'; payload: { fileName: string; base64: string } }
+  | { type: 'copySecretKey' };
 
 /**
  * The Settings menu — deliberately a separate webview panel from the main
@@ -93,7 +95,38 @@ export class SettingsPanel implements vscode.Disposable {
       await this.handleGenerateRagCorpus(message.payload.files);
     } else if (message.type === 'expandRagZip') {
       await this.handleExpandRagZip(message.payload.fileName, message.payload.base64);
+    } else if (message.type === 'copySecretKey') {
+      await this.copySecretKeyToClipboard();
     }
+  }
+
+  /**
+   * "Copy CI/CD Secret Key" — the ONLY place this extension ever exposes
+   * the raw Auto Password Encryption master key to a human. SoftPlay never
+   * needs this itself: "Verify & Fix Code" gets it injected automatically
+   * into its own child process's environment (see
+   * execution/testExecutor.ts). This exists purely for the scenario
+   * security/secretVault.ts's own doc comment already anticipates — a
+   * SAVED generated file later run OUTSIDE the extension (a standalone
+   * terminal, a real CI/CD pipeline) needs `SoftPlay_SECRET_KEY` set to
+   * decrypt its `ENC[v1:...]` tokens, and until now there was literally no
+   * way for a user to learn what value that actually is (it's held in
+   * VS Code's OS-keychain-backed SecretStorage, not a plain file).
+   *
+   * Deliberately copies to the clipboard rather than displaying it in the
+   * webview — never rendered into the DOM, never left sitting visible in
+   * a screen-shared window.
+   */
+  private async copySecretKeyToClipboard(): Promise<void> {
+    const env = await getSecretEnv(this.context);
+    const value = env[SECRET_ENV_VAR];
+    await vscode.env.clipboard.writeText(`${SECRET_ENV_VAR}=${value}`);
+    void vscode.window.showInformationMessage(
+      `Copied ${SECRET_ENV_VAR} to the clipboard. This is your own local Auto Password Encryption key — set it as an ` +
+        `environment variable wherever you run a saved generated test OUTSIDE this extension (a terminal, your CI/CD ` +
+        `pipeline's own secrets manager). Never commit it to source control or paste it into a generated file — ` +
+        'store it the same way you would any other secret.'
+    );
   }
 
   /**
@@ -483,6 +516,26 @@ export class SettingsPanel implements vscode.Disposable {
     </div>
   </div>
 
+  <h2>Auto Password Encryption</h2>
+  <p class="note" style="margin-top: 0;">
+    Every credential SoftPlay detects (recorded UI fields, API Authorization tab values, and now the "Instant
+    instructions to LLM" chat box) is encrypted locally before it ever reaches Copilot, and saved into generated code
+    only as an <code>ENC[v1:...]</code> token — never the real value. SoftPlay itself supplies the decryption key
+    automatically whenever it runs your code ("Verify &amp; Fix Code"). If you run a SAVED generated test file
+    yourself — a terminal, your own CI/CD pipeline — it needs the same key, set as the
+    <code>SoftPlay_SECRET_KEY</code> environment variable, to decrypt those tokens.
+  </p>
+  <div style="display: flex; justify-content: flex-end; margin-bottom: 8px;">
+    <button type="button" id="copySecretKeyBtn" class="btn btn-secondary">Copy CI/CD Secret Key</button>
+  </div>
+  <p class="note" style="margin-top: 0;">
+    Copies <code>SoftPlay_SECRET_KEY=&lt;value&gt;</code> to your clipboard — this is YOUR OWN key, generated once and
+    stored in VS Code's own OS-keychain-backed secret storage, never written to a plain file. Store it the same way
+    you'd store any other secret (your CI/CD system's own secrets manager). <b>Never</b> paste it into a generated
+    code file or commit it to source control — doing so would let anyone who can read that file decrypt every
+    credential this extension has ever encrypted for you.
+  </p>
+
   <h2>Reusable Components (RAG)</h2>
   <div class="field">
     <label>
@@ -542,6 +595,10 @@ export class SettingsPanel implements vscode.Disposable {
 
       document.getElementById('architectureLink').addEventListener('click', () => {
         vscode.postMessage({ type: 'openArchitectureDoc' });
+      });
+
+      document.getElementById('copySecretKeyBtn').addEventListener('click', () => {
+        vscode.postMessage({ type: 'copySecretKey' });
       });
 
       document.querySelectorAll('input[name="agenticModeEnabled"]').forEach((radio) => {

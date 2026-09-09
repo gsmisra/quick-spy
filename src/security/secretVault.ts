@@ -152,7 +152,7 @@ export async function getSecretEnv(context: vscode.ExtensionContext): Promise<Re
  * fields plus the token/API-key/PIN/credential shapes the API Automation
  * Authorization tab already names explicitly.
  */
-const SECRET_FIELD_PATTERN = /password|passwd|\bpwd\b|passphrase|secret|credential|\bpin\b|api[-_]?key|auth[-_]?token/i;
+export const SECRET_FIELD_PATTERN = /password|passwd|\bpwd\b|passphrase|secret|credential|\bpin\b|api[-_]?key|auth[-_]?token/i;
 
 export function looksLikeSecretField(text: string): boolean {
   return SECRET_FIELD_PATTERN.test(text);
