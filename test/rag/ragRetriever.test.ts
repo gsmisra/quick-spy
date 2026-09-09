@@ -239,6 +239,19 @@ test('formatRagPromptSection truncates an unusually large recipe body rather tha
   assert.match(section, /truncated/);
 });
 
+test('formatRagPromptSection caps the TOTAL section size even when several individually-under-cap recipes combine to exceed it', () => {
+  const matches = Array.from({ length: 5 }, (_, i) => ({
+    id: `helper-${i}`,
+    title: `Helper ${i}`,
+    body: 'y'.repeat(1_400), // under the per-recipe cap on its own
+    score: 0.9 - i * 0.01,
+    filePath: `/fake/.github/rag/helper-${i}.md`
+  }));
+  const section = formatRagPromptSection(matches, 'java');
+  assert.ok(section.length <= 4_200, `expected the total section to stay near the 4,000-char cap, got ${section.length}`);
+  assert.match(section, /truncated at/);
+});
+
 test('formatRagPromptSection leaves a normally-sized recipe body completely untouched', () => {
   const normalBody = '```java\nvar row = PostgresHelper.queryOne(conn, sql, id);\n```';
   const section = formatRagPromptSection(

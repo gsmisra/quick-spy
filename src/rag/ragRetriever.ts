@@ -74,7 +74,16 @@ export async function retrieveRagMatches(
   queryText: string,
   language: RagLanguage,
   automationMode: RagAutomationMode,
-  topK = 3
+  // Lowered from 3 to 2 — automationMode moving from a hard filter to a
+  // soft preference means a query now legitimately matches MORE recipes
+  // than before (mode mismatches no longer disqualify a recipe outright),
+  // so the same topK now injects more total content into the prompt on
+  // average than it used to. Fewer, higher-scoring components is a safer
+  // default against a real provider failure mode this extension has hit in
+  // practice — see runLlmRefinement()'s own retry-without-RAG fallback and
+  // RAG_MAX_RECIPE_BODY_CHARS below, both hardening the SAME risk from a
+  // different angle.
+  topK = 2
 ): Promise<RagMatch[]> {
   if (!queryText.trim()) {
     return [];
@@ -105,8 +114,20 @@ export async function retrieveRagMatches(
  * Generation", which never includes RAG content at all, keeps working
  * fine with the exact same recipe library, misleadingly looking like "RAG
  * itself is broken" when the real cause is one oversized recipe tipping a
- * request that was already close to the model's own context limit. */
-const RAG_MAX_RECIPE_BODY_CHARS = 4_000;
+ * request that was already close to the model's own context limit.
+ * Lowered from 4,000 to 1,500 for the same reason `topK` was lowered above
+ * — automationMode is now a soft preference rather than a hard filter, so
+ * a real request measurably injects RAG content more often than it used
+ * to; a smaller per-recipe ceiling keeps the WORST case bounded even
+ * against that. */
+const RAG_MAX_RECIPE_BODY_CHARS = 1_500;
+
+/** A second, TOTAL cap across every matched recipe combined — belt and
+ * suspenders on top of the per-recipe cap above. `topK * RAG_MAX_RECIPE_BODY_CHARS`
+ * bounds the worst case mathematically, but this catches it explicitly
+ * too rather than relying on that arithmetic staying true if either
+ * constant is tuned again later without updating the other. */
+const RAG_MAX_TOTAL_SECTION_CHARS = 4_000;
 
 /** Pure formatter — returns `''` (no section at all) when there's nothing
  * to show, so a request with no relevant reusable component costs exactly
@@ -146,5 +167,9 @@ export function formatRagPromptSection(matches: RagMatch[], language: RagLanguag
   if (importLines.length > 0) {
     parts.push(`\n### Required imports for the component(s) used above\n${importLines.map((line) => `\`${line}\``).join('\n')}`);
   }
-  return parts.join('\n');
+  const section = parts.join('\n');
+  if (section.length > RAG_MAX_TOTAL_SECTION_CHARS) {
+    return `${section.slice(0, RAG_MAX_TOTAL_SECTION_CHARS)}\n… (RAG section truncated at ${RAG_MAX_TOTAL_SECTION_CHARS.toLocaleString()} total chars — a hard safety cap; consider trimming .github/rag/ recipes or reducing how many match.)`;
+  }
+  return section;
 }

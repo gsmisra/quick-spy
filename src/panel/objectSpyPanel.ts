@@ -1474,14 +1474,16 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
     if (encryptedCount > 0) {
       this.outputChannel.appendLine(`Auto Password Encryption: encrypted ${encryptedCount} credential value(s) before sending to Copilot.`);
     }
+    const instructionFileChars = instructions.reduce((sum, f) => sum + f.content.length, 0);
     this.outputChannel.appendLine(
       `Sending to Copilot model "${settings.copilotModelId}" (${isApiMode ? 'API' : 'UI'} mode): target ` +
         `${settings.language} ${settings.languageVersion}, mandatory standard ` +
         `${builtIn ? `(${builtIn.length} chars)` : '(MISSING — instructions .md failed to load)'}, ` +
-        `${instructions.length} project .md file(s), ` +
+        `${instructions.length} project .md file(s) (${instructionFileChars.toLocaleString()} chars), ` +
+        `RAG section (${ragSection.length.toLocaleString()} chars${ragMatches.length ? `, ${ragMatches.length} match(es): ${ragMatches.map((m) => m.id).join(', ')}` : ', no matches'}), ` +
         `${this.linkedScenario ? `linked scenario "${this.linkedScenario.scenarioName}"` : 'no linked scenario'}, ` +
         `${isApiMode ? `API request to ${apiDetails?.url}` : `${playwrightCode.length} chars of reference code`} — ` +
-        `prompt is ${prompt.length} chars total.`
+        `prompt is ${prompt.length.toLocaleString()} chars total.`
     );
 
     try {
@@ -1551,12 +1553,15 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
           }
           const retryMessage = retryErr instanceof CopilotUnavailableError ? retryErr.message : describeError(retryErr);
           this.outputChannel.appendLine(`Retry without RAG also failed: ${retryMessage}`);
-          this.postLlmError(retryMessage);
+          // Failed even WITHOUT RAG — the RAG section was never the actual
+          // bottleneck, so say so plainly rather than leaving the user
+          // thinking dropping RAG should have fixed it.
+          this.postLlmError(buildEmptyResponseGuidance(retryMessage, instructions.length, false));
           return;
         }
       }
 
-      this.postLlmError(message);
+      this.postLlmError(isEmptyModelResponseError(message) ? buildEmptyResponseGuidance(message, instructions.length, !!ragSection) : message);
     }
   }
 
@@ -2555,6 +2560,31 @@ function describeError(err: unknown): string {
 function isEmptyModelResponseError(message: string): boolean {
   const normalized = message.toLowerCase();
   return normalized.includes('no choices') || normalized.includes('empty response') || normalized.includes('no completion');
+}
+
+/** Turns the raw, cryptic "Response contained no choices."-style provider
+ * error into something the user can actually ACT on — this failure has no
+ * single fixed cause (it's the model backend's own way of saying "this
+ * request couldn't be completed", commonly but not exclusively an
+ * oversized prompt for the selected model's context window), so this
+ * names the concrete levers that actually shrink a request rather than
+ * leaving the user to guess. `ragWasStillIncluded` distinguishes "this
+ * failed WITH RAG content included, an automatic retry without it is
+ * about to run/already ran" from "this failed even withOUT RAG — RAG was
+ * never the actual bottleneck" so the guidance doesn't misdirect blame. */
+function buildEmptyResponseGuidance(rawMessage: string, customInstructionFileCount: number, ragWasStillIncluded: boolean): string {
+  const levers = [
+    customInstructionFileCount > 0 ? `uncheck some of the ${customInstructionFileCount} checked Custom Instructions file(s)` : undefined,
+    'select fewer Gherkin steps in the linked scenario (partial-selection mode sends a smaller prompt)',
+    'pick a Copilot model with a larger context window in Settings',
+    ragWasStillIncluded ? 'turning off "Use reusable components" (RAG) in Settings, if the components matched aren\'t actually relevant here' : undefined
+  ].filter((lever): lever is string => !!lever);
+  return (
+    `Copilot returned an empty response (no choices) — this usually means the combined prompt was too large or ` +
+    `otherwise rejected by the model backend, not a bug in the code you recorded. Things that actually shrink the ` +
+    `request: ${levers.join('; ')}. Check the SoftPlay Output channel for the exact prompt size breakdown. ` +
+    `Raw provider error: ${rawMessage}`
+  );
 }
 
 /**

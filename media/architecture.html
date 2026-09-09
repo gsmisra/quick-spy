@@ -857,7 +857,7 @@
     <h2 class="inline-h">Quality &amp; testing</h2>
     <div class="card">
       <div class="grid cols-4">
-        <div class="card tight"><span class="tag">148/148 passing</span><p>Every RAG module added its own tests to the existing offline suite — <code>node --test</code>, zero new test-framework dependency.</p></div>
+        <div class="card tight"><span class="tag">149/149 passing</span><p>Every RAG module added its own tests to the existing offline suite — <code>node --test</code>, zero new test-framework dependency.</p></div>
         <div class="card tight"><span class="tag">Real scenario proven</span><p>The exact "login to Postgres, query a table, validate the result" example retrieves the right recipe — and only for the language/mode it applies to.</p></div>
         <div class="card tight"><span class="tag">Zero external services</span><p>No vector database, no FAISS, no model download — the whole pipeline is pure TypeScript arithmetic plus local file reads.</p></div>
         <div class="card tight"><span class="tag">Ships clean</span><p>Full compile and an actual <code>vsce package</code> both verified — the same discipline as every other feature on this page.</p></div>
@@ -950,7 +950,7 @@
 
     <h2 class="inline-h">Quality &amp; testing</h2>
     <div class="grid cols-3" style="margin-top:12px;">
-      <div class="card tight"><span class="tag">148/148 tests passing</span><p>Every new module — ingestion, xlsx/docx/pdf parsing, CSV generation — has its own offline unit tests, including real round-trips built with each library's own writer.</p></div>
+      <div class="card tight"><span class="tag">149/149 tests passing</span><p>Every new module — ingestion, xlsx/docx/pdf parsing, CSV generation — has its own offline unit tests, including real round-trips built with each library's own writer.</p></div>
       <div class="card tight"><span class="tag">Fixed a real Node-version bug</span><p><code>pdfjs-dist</code> needs ES2024's <code>Promise.withResolvers</code> — missing on some older bundled Node versions. A small ponyfill (installed only if genuinely missing) fixed a real crash found on a colleague's machine.</p></div>
       <div class="card tight"><span class="tag">Ships clean</span><p>Full compile and an actual <code>vsce package</code> both verified after every change — the same discipline as every other feature on this page.</p></div>
     </div>
