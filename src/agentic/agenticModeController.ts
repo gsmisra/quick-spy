@@ -14,7 +14,14 @@ import { parseXlsxBuffer, buildXlsxPreview } from './xlsxIngestion';
 import { parseDocxBuffer, buildDocxPreview } from './docxIngestion';
 import { parsePdfBuffer, buildPdfPreview } from './pdfIngestion';
 import { InvalidTestCaseCsvError, normalizeTestCaseCsvResponse } from './csvTestCaseGenerator';
-import { AGENTIC_LEGACY_UNSUPPORTED_EXTENSIONS, AgenticFileKind, AgenticFileMeta, AgenticIngestedFile, AgenticIngestionConfig } from './agenticTypes';
+import {
+  AGENTIC_LEGACY_UNSUPPORTED_EXTENSIONS,
+  AGENTIC_MAX_SEGMENT_CHARS,
+  AgenticFileKind,
+  AgenticFileMeta,
+  AgenticIngestedFile,
+  AgenticIngestionConfig
+} from './agenticTypes';
 
 /**
  * Total Agentic Mode — a deliberately SEPARATE module from every existing
@@ -335,14 +342,52 @@ export class AgenticModeController implements vscode.Disposable {
   // Shared context assembly
   // ------------------------------------------------------------------
 
-  private buildIngestedContext(): string {
+  /**
+   * Every currently ingested file contributes — this loop never skips a
+   * file, filters by kind, or caps how MANY files go in; the only per-file
+   * limit is `AGENTIC_MAX_SEGMENT_CHARS` (60,000 chars — see
+   * agenticTypes.ts) as a last-resort safety net against one pathological
+   * file (an unconfigured multi-thousand-row spreadsheet, a huge PDF)
+   * blowing out the whole request on its own.
+   *
+   * `audit`, when true, logs a line PER FILE to the Output channel — real
+   * character counts, not a claim: how large the file's selected segment
+   * is, whether the safety cap actually cut it, and the running total — so
+   * "did my file's content actually make it into the prompt, in full or
+   * truncated" is something you can verify directly in the SoftPlay Output
+   * channel, not something you have to take on trust. Deliberately opt-in
+   * (only the three generate*() methods below pass `true`) — this method
+   * is ALSO called by `estimateTokens()` on essentially every keystroke/
+   * config change (Token Monitoring), where logging unconditionally would
+   * flood the Output channel with noise for zero benefit.
+   */
+  private buildIngestedContext(audit = false): string {
     if (this.files.size === 0) {
+      if (audit) {
+        this.outputChannel.appendLine('Agentic Mode — context audit: no files ingested; sending custom instructions/RAG/chat-box content only.');
+      }
       return '(No input files have been ingested yet.)';
     }
     const parts: string[] = [];
+    let totalChars = 0;
+    if (audit) {
+      this.outputChannel.appendLine(`Agentic Mode — context audit: assembling ${this.files.size} file(s) for this generation.`);
+    }
     for (const file of this.files.values()) {
       const segment = extractSegmentForFile(file);
+      totalChars += segment.text.length;
+      if (audit) {
+        this.outputChannel.appendLine(
+          `  - ${file.fileName} (${file.kind}): ${segment.text.length.toLocaleString()} char(s) included` +
+            (segment.truncated
+              ? ` — TRUNCATED at the ${AGENTIC_MAX_SEGMENT_CHARS.toLocaleString()}-char safety cap; narrow this file's range in Ingestion Configuration to fit more of it.`
+              : ' (full selection, not truncated).')
+        );
+      }
       parts.push(`### File: ${file.fileName}${segment.truncated ? ' (truncated to the size cap)' : ''}\n${segment.text}`);
+    }
+    if (audit) {
+      this.outputChannel.appendLine(`Agentic Mode — context audit: ${totalChars.toLocaleString()} total char(s) of file content included in this request.`);
     }
     return parts.join('\n\n');
   }
@@ -563,9 +608,10 @@ export class AgenticModeController implements vscode.Disposable {
     this.generatedFeaturePanel.startGenerating();
     try {
       const chatModel = await this.resolveModel(settings);
-      const ingestedContext = this.buildIngestedContext();
+      const ingestedContext = this.buildIngestedContext(true);
       const ragSection = await this.buildRagSection(settings, `${this.lastUserRequest}\n${ingestedContext}`.slice(0, 4000));
       const systemInstructions = await this.buildSystemInstructions(settings, ragSection, false);
+      this.outputChannel.appendLine('Agentic Mode — invoking the LangChain feature-file chain (ChatPromptTemplate -> Copilot -> StringOutputParser)...');
       const chain = buildAgenticFeatureFileChain(new VSCodeCopilotToolCallingModel(chatModel, cts.token));
       const result = await chain.invoke({
         systemInstructions:
@@ -608,9 +654,10 @@ export class AgenticModeController implements vscode.Disposable {
     this.aiCodePanel.startGenerating();
     try {
       const chatModel = await this.resolveModel(settings);
-      const ingestedContext = this.buildIngestedContext();
+      const ingestedContext = this.buildIngestedContext(true);
       const ragSection = await this.buildRagSection(settings, `${this.lastUserRequest}\n${ingestedContext}`.slice(0, 4000));
       const systemInstructions = await this.buildSystemInstructions(settings, ragSection, false);
+      this.outputChannel.appendLine('Agentic Mode — invoking the LangChain automation-code chain (ChatPromptTemplate -> Copilot -> StringOutputParser)...');
       const chain = buildAgenticAutomationCodeChain(new VSCodeCopilotToolCallingModel(chatModel, cts.token));
       const result = await chain.invoke({
         systemInstructions:
@@ -662,9 +709,10 @@ export class AgenticModeController implements vscode.Disposable {
     webview?.postMessage({ type: 'agentic:csvStatus', payload: { state: 'generating' } });
     try {
       const chatModel = await this.resolveModel(settings);
-      const ingestedContext = this.buildIngestedContext();
+      const ingestedContext = this.buildIngestedContext(true);
       const ragSection = await this.buildRagSection(settings, `${this.lastUserRequest}\n${ingestedContext}`.slice(0, 4000));
       const systemInstructions = await this.buildSystemInstructions(settings, ragSection, true);
+      this.outputChannel.appendLine('Agentic Mode — invoking the LangChain manual-test-case-CSV chain (ChatPromptTemplate -> Copilot -> StringOutputParser)...');
       const chain = buildAgenticTestCaseCsvChain(new VSCodeCopilotToolCallingModel(chatModel, cts.token));
       const result = await chain.invoke({
         systemInstructions,

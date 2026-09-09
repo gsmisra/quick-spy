@@ -1490,11 +1490,72 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
       this.postLlmDone(extractCodeBlock(accumulated));
       void this.recordReceivedTokens(accumulated, settings.copilotModelId);
     } catch (err) {
-      if (!cts.token.isCancellationRequested) {
-        const message = err instanceof CopilotUnavailableError ? err.message : describeError(err);
-        this.outputChannel.appendLine(`Copilot request failed: ${message}`);
-        this.postLlmError(message);
+      if (cts.token.isCancellationRequested) {
+        return;
       }
+      const message = err instanceof CopilotUnavailableError ? err.message : describeError(err);
+      this.outputChannel.appendLine(`Copilot request failed: ${message}`);
+
+      // A response with genuinely zero completions from the model backend
+      // (seen in practice — see isEmptyModelResponseError()'s own doc
+      // comment) is exactly the failure mode an oversized "Reusable
+      // components" RAG section combined with an already-large prompt
+      // (built-in instructions + every checked custom .md file + the full
+      // recorded/API reference code) can trigger — "Start AI Feature File
+      // Generation" never includes RAG at all, so it keeps working fine
+      // regardless, misleadingly looking like "RAG itself" is what's
+      // broken. A single recipe's own body is now size-capped too (see
+      // ragRetriever.ts's formatRagPromptSection()), but this retry is a
+      // safety net for whatever combination still tips a request over —
+      // one automatic attempt WITHOUT the RAG section, so this specific,
+      // recoverable failure doesn't just dead-end on a cryptic raw
+      // provider error the user has no way to act on.
+      if (ragSection && isEmptyModelResponseError(message)) {
+        this.outputChannel.appendLine('Copilot returned an empty response with RAG components included — retrying once without them...');
+        const fallbackPrompt = isApiMode
+          ? await buildApiLlmPrompt(
+              settings.language,
+              settings.languageVersion,
+              builtIn,
+              instructions,
+              apiDetails!,
+              customInstructions,
+              this.getEncryptSecret(),
+              '',
+              this.linkedScenario,
+              this.currentSuggestedBaseName()
+            )
+          : buildLlmPrompt(
+              settings.language,
+              settings.languageVersion,
+              settings.browserChannel,
+              builtIn,
+              instructions,
+              playwrightCode,
+              customInstructions,
+              '',
+              this.linkedScenario,
+              this.currentSuggestedBaseName()
+            );
+        this.postLlmStart();
+        try {
+          const accumulated = await this.streamCopilotResponse(fallbackPrompt, settings.copilotModelId, cts, (chunk) => this.postLlmChunk(chunk));
+          this.outputChannel.appendLine(`Copilot response received on retry (without RAG): ${accumulated.length} chars.`);
+          this.postLlmDone(extractCodeBlock(accumulated));
+          void this.recordReceivedTokens(accumulated, settings.copilotModelId);
+          return;
+        } catch (retryErr) {
+          if (cts.token.isCancellationRequested) {
+            return;
+          }
+          const retryMessage = retryErr instanceof CopilotUnavailableError ? retryErr.message : describeError(retryErr);
+          this.outputChannel.appendLine(`Retry without RAG also failed: ${retryMessage}`);
+          this.postLlmError(retryMessage);
+          return;
+        }
+      }
+
+      this.postLlmError(message);
     }
   }
 
@@ -2477,6 +2538,21 @@ function mapCodegenStatus(status: CodegenStatus): PanelStatus {
 
 function describeError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/** Matches the specific "the model backend returned zero completions"
+ * failure shape (observed verbatim as "Response contained no choices.")
+ * — this is the underlying GitHub Copilot Chat extension/provider's own
+ * error text, not one this codebase produces, so it's matched loosely
+ * (case-insensitive substring) rather than exactly, in case the wording
+ * varies slightly across Copilot Chat versions. Reported in practice when
+ * an already-large "Start AI Code Generation" prompt (built-in
+ * instructions + custom .md files + full recorded/API code) grows further
+ * with an oversized RAG "Reusable components" section — see
+ * runLlmRefinement()'s retry-without-RAG fallback right where this is used. */
+function isEmptyModelResponseError(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return normalized.includes('no choices') || normalized.includes('empty response') || normalized.includes('no completion');
 }
 
 /** Bounds how much of a raw compiler/test-runner error goes into a modal

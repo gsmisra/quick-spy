@@ -45,6 +45,21 @@ export async function retrieveRagMatches(
     });
 }
 
+/** Hard safety net on a SINGLE recipe body's contribution to the prompt —
+ * "Generate RAG Corpus format" (ragCorpusGenerator.ts) accepts source
+ * files up to 200KB and asks Copilot to write a recipe from one, with no
+ * cap on how much of that the model echoes back into the body it returns.
+ * Without this, one unusually verbose auto-generated recipe (or a
+ * hand-written one someone pasted a large class into) can silently make
+ * "Start AI Code Generation"'s ALREADY sizeable prompt (built-in
+ * instructions + every checked custom .md file + the full recorded/API
+ * code) too large for the model — while "Start AI Feature File
+ * Generation", which never includes RAG content at all, keeps working
+ * fine with the exact same recipe library, misleadingly looking like "RAG
+ * itself is broken" when the real cause is one oversized recipe tipping a
+ * request that was already close to the model's own context limit. */
+const RAG_MAX_RECIPE_BODY_CHARS = 4_000;
+
 /** Pure formatter — returns `''` (no section at all) when there's nothing
  * to show, so a request with no relevant reusable component costs exactly
  * zero extra prompt tokens, never a "no matches found" placeholder. */
@@ -70,7 +85,11 @@ export function formatRagPromptSection(matches: RagMatch[], language: RagLanguag
       'implementation — only call it.'
   ];
   matches.forEach((match, i) => {
-    parts.push(`\n### ${i + 1}. ${match.title} (id: \`${match.id}\`)`, match.body);
+    const body =
+      match.body.length > RAG_MAX_RECIPE_BODY_CHARS
+        ? `${match.body.slice(0, RAG_MAX_RECIPE_BODY_CHARS)}\n… (truncated — this recipe's body is unusually large; consider trimming it in .github/rag/)`
+        : match.body;
+    parts.push(`\n### ${i + 1}. ${match.title} (id: \`${match.id}\`)`, body);
   });
   if (importLines.length > 0) {
     parts.push(`\n### Required imports for the component(s) used above\n${importLines.map((line) => `\`${line}\``).join('\n')}`);

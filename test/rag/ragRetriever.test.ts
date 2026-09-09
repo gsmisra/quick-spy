@@ -109,3 +109,17 @@ test('formatRagPromptSection omits python imports when formatting for java', () 
   );
   assert.doesNotMatch(section, /testutil\.a/);
 });
+
+test('formatRagPromptSection truncates an unusually large recipe body rather than injecting it whole', () => {
+  const hugeBody = 'x'.repeat(10_000);
+  const section = formatRagPromptSection([{ id: 'huge', title: 'Huge Helper', body: hugeBody, score: 0.9 }], 'java');
+  assert.ok(section.length < hugeBody.length, 'the section should be meaningfully smaller than the raw oversized body');
+  assert.match(section, /truncated/);
+});
+
+test('formatRagPromptSection leaves a normally-sized recipe body completely untouched', () => {
+  const normalBody = '```java\nvar row = PostgresHelper.queryOne(conn, sql, id);\n```';
+  const section = formatRagPromptSection([{ id: 'a', title: 'Helper A', body: normalBody, score: 0.9 }], 'java');
+  assert.match(section, /PostgresHelper\.queryOne/);
+  assert.doesNotMatch(section, /truncated/);
+});
