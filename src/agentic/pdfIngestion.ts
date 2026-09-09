@@ -1,4 +1,5 @@
 import { capSegment, sliceRange } from './agenticExtractionUtils';
+import { installPromiseWithResolversPolyfill } from './promiseWithResolversPolyfill';
 import { AgenticExtractedSegment, AgenticFileMeta, AgenticIngestionConfig, AgenticPdfData } from './agenticTypes';
 
 /**
@@ -23,7 +24,15 @@ import { AgenticExtractedSegment, AgenticFileMeta, AgenticIngestionConfig, Agent
  * ESM-only package from CJS in Node) and left untyped (`any`) rather than
  * fighting `moduleResolution: "node"`'s lack of `.mjs`/`.d.mts`
  * co-resolution for one thin, reviewed integration point.
+ *
+ * `installPromiseWithResolversPolyfill()` runs BEFORE the dynamic import
+ * below, unconditionally — pdfjs-dist's Node build calls
+ * `Promise.withResolvers()` (ES2024) at module-evaluation time, which
+ * throws immediately on any Node/V8 without it (see that module's own doc
+ * comment for the real-world failure this fixes).
  */
+
+installPromiseWithResolversPolyfill();
 
 let pdfjsLibPromise: Promise<any> | undefined;
 function loadPdfjs(): Promise<any> {
