@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>SoftPlay — Architecture &amp; Technical Information</title>
+<title>SoftPlay — Architecture &amp; Technical Information -- v0.1.72</title>
 <style>
   :root {
     --td-green: #54b948;
@@ -335,6 +335,7 @@
   <a href="#llm">LLM Integration</a>
   <a href="#verify-fix-agent">Verify &amp; Fix Agent</a>
   <a href="#rag">Reusable Components (RAG)</a>
+  <a href="#agentic-mode">Total Agentic Mode</a>
   <a href="#dataflow">Data Flow</a>
   <a href="#components">Components</a>
   <a href="#functions">Function Reference</a>
@@ -346,7 +347,7 @@
 
 <header class="hero">
   <div class="wrap">
-    <span class="eyebrow">Architecture &amp; Technical Information</span>
+    <span class="eyebrow">Architecture &amp; Technical Information -- v0.1.72</span>
     <h1 class="headline">TD Securities Agentic Test Automation</h1>
     <p class="subhead">
       A single reference for how this VS Code extension is built, how it caches data locally, how it talks to the
@@ -859,6 +860,93 @@
         <span class="emoji">🗺️</span>
         <span><strong>Phase 2 evaluated, deliberately not shipped:</strong> a local neural-embedding upgrade (a quantized model + WASM runtime, e.g. via <code>@xenova/transformers</code>) was prototyped far enough to size it honestly — a native-binary transitive dependency (<code>sharp</code>) stubbable via npm <code>overrides</code>, but the WASM runtime plus model still added roughly 70-100MB to an already ~118MB packaged extension, plus real runtime memory/latency cost, for a small internal recipe corpus. Rejected to preserve the zero-dependency, offline-first posture. Shipped instead: a dependency-free TF-IDF enhancement — bigram phrase-matching plus a hand-curated synonym table for common test-automation/DB/API vocabulary (see <code>tfidfEmbeddings.ts</code>) — real accuracy improvement, zero size cost, zero new runtime risk. Still flagged for later: extending retrieval into the Verify &amp; Fix agent's own fix-loop.</span>
       </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= TOTAL AGENTIC MODE ================= -->
+<section id="agentic-mode">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="eyebrow">🤖🔗 New — multi-file ingestion, LangChain-orchestrated</span>
+      <h2>Total Agentic Mode</h2>
+      <p>A second, self-contained sidebar mode: drop requirements/data files of almost any format, dial in exactly which part of each one matters, and generate a feature file, automation code, and a Jira-ready manual test-case CSV — all from the same ingested context.</p>
+    </div>
+
+    <div class="card" style="margin-bottom:28px;">
+      <span class="tag">Executive summary</span>
+      <h3 style="font-size:19px;">Point it at your source documents instead of typing a scenario by hand</h3>
+      <p>
+        Switching "Mode" to <b>Total Agentic Mode</b> in Settings swaps the sidebar for a file drop zone. Drop a
+        requirements spreadsheet, a Word doc, a PDF spec, a JSON/XML/YAML config, or plain text/CSV — SoftPlay parses
+        each one and opens an <b>Ingestion Configuration</b> panel where you narrow every file down to exactly the
+        sheet/rows/columns, document section, page range, or line range that matters, with nothing silently skipped
+        and nothing sent that wasn't asked for. Click Generate and the selected slices, your team's checked custom
+        instructions, matching RAG components, and whatever's in "Instant instructions to LLM" combine into one
+        LangChain-orchestrated request — producing a feature file, automation code, or a Jira-importable manual
+        test-case CSV, on demand.
+      </p>
+    </div>
+
+    <h2 class="inline-h">End-to-end flow</h2>
+    <div class="card">
+      <div class="diagram">
+        <div class="row">
+          <div class="node webview"><b>Drop input files</b><span>csv · json · xml · yaml · txt/md/log · xlsx · docx · pdf</span></div>
+        </div>
+        <div class="arrow-down">▼</div>
+        <div class="row">
+          <div class="node fs"><b>Parsed in memory only — never written to disk</b><span>exceljs (xlsx) · mammoth (docx) · pdfjs-dist (pdf) · built-in for the rest</span></div>
+        </div>
+        <div class="arrow-down">▼</div>
+        <div class="row">
+          <div class="node cache"><b>Ingestion Configuration panel</b><span>per file: rows+columns, sheet, heading range, page range, or line range — a live badge flags anything trimmed by the safety cap</span></div>
+        </div>
+        <div class="arrow-down">▼</div>
+        <div class="row">
+          <div class="node engine"><b>Context assembled</b><span>selected segments + checked custom instructions + RAG matches + chat box — reflected live in Token Monitoring</span></div>
+        </div>
+        <div class="arrow-down">▼</div>
+        <div class="row">
+          <div class="node cloud"><b>One shared LangChain chain</b><span>ChatPromptTemplate → Copilot chat model → StringOutputParser</span></div>
+        </div>
+        <div class="arrow-down">▼</div>
+        <div class="row">
+          <div class="node external">Feature file</div>
+          <div class="node external">Automation code</div>
+          <div class="node external">Manual test-case CSV</div>
+        </div>
+      </div>
+    </div>
+
+    <h2 class="inline-h">Per-format selection — no format is "all or nothing"</h2>
+    <table class="ref">
+      <tr><th>Format</th><th>Narrows down to</th><th>Parser</th></tr>
+      <tr><td>csv</td><td>Row range + column checklist</td><td>Built-in, dependency-free</td></tr>
+      <tr><td>json / xml / yaml / txt / md / log</td><td>Line range</td><td>Built-in, dependency-free</td></tr>
+      <tr><td>xlsx</td><td>Sheet picker, then row range + column checklist</td><td><code>exceljs</code></td></tr>
+      <tr><td>docx</td><td>Heading-range (a real "page" isn't stored in the file format — margins/fonts decide that at print time, not the document data)</td><td><code>mammoth</code></td></tr>
+      <tr><td>pdf</td><td>Real page range (PDF, unlike docx, does store page boundaries)</td><td><code>pdfjs-dist</code></td></tr>
+    </table>
+
+    <h2 class="inline-h">Built as a separate subsystem, on purpose</h2>
+    <div class="grid cols-2">
+      <div class="card tight">
+        <span class="tag">Standard mode — untouched</span>
+        <p>Its own <code>main.js</code>/<code>main.css</code>, its own <code>AiCodePanel</code>/<code>GeneratedFeaturePanel</code> instances. Zero lines of Standard mode's own files changed by this feature.</p>
+      </div>
+      <div class="card tight">
+        <span class="tag">Total Agentic Mode — new, isolated</span>
+        <p><code>agentic/agenticModeController.ts</code> owns its own state and a <i>second, independent</i> pair of <code>AiCodePanel</code>/<code>GeneratedFeaturePanel</code> instances; its own sidebar template and script (<code>agenticModeSidebarView.ts</code> / <code>media/agenticMode.js</code>) swap in only while the mode is on.</p>
+      </div>
+    </div>
+    <p class="note" style="margin-top:14px;">Genuinely shared, not duplicated: RAG retrieval (<code>ragIndexer.ts</code>/<code>ragRetriever.ts</code>), custom-instruction file reading, and the exact same Token Monitoring message contract Standard mode's own bar already renders.</p>
+
+    <h2 class="inline-h">Quality &amp; testing</h2>
+    <div class="grid cols-3" style="margin-top:12px;">
+      <div class="card tight"><span class="tag">138/138 tests passing</span><p>Every new module — ingestion, xlsx/docx/pdf parsing, CSV generation — has its own offline unit tests, including real round-trips built with each library's own writer.</p></div>
+      <div class="card tight"><span class="tag">Fixed a real Node-version bug</span><p><code>pdfjs-dist</code> needs ES2024's <code>Promise.withResolvers</code> — missing on some older bundled Node versions. A small ponyfill (installed only if genuinely missing) fixed a real crash found on a colleague's machine.</p></div>
+      <div class="card tight"><span class="tag">Ships clean</span><p>Full compile and an actual <code>vsce package</code> both verified after every change — the same discipline as every other feature on this page.</p></div>
     </div>
   </div>
 </section>
@@ -1379,7 +1467,7 @@
 
 <footer>
   <div class="wrap">
-    <p><span class="td">SoftPlay</span> — Architecture &amp; Technical Information. Generated locally; opens as a static, offline page with no external dependencies.</p>
+    <p><span class="td">SoftPlay</span> — Architecture &amp; Technical Information -- v0.1.72. Generated locally; opens as a static, offline page with no external dependencies.</p>
     <p class="muted">Close this browser tab to return to VS Code.</p>
   </div>
 </footer>
