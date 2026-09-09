@@ -639,7 +639,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
   private async refreshPromptFiles(): Promise<void> {
     const [instructionFiles, ragFiles] = await Promise.all([
       vscode.workspace.findFiles('.github/**/*.md', '.github/rag/**'),
-      vscode.workspace.findFiles('.github/rag/*.md')
+      vscode.workspace.findFiles('.github/rag/**/*.md')
     ]);
     const relPaths = instructionFiles.map((f) => vscode.workspace.asRelativePath(f)).sort();
     const ragRelPaths = ragFiles.map((f) => vscode.workspace.asRelativePath(f)).sort();

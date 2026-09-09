@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { sendPrompt, CopilotUnavailableError } from '../llm/copilotClient';
 import { readFileCachedSync } from '../cache/fileCache';
-import { normalizeGeneratedRecipe, slugify } from './ragRecipeNormalizer';
+import { normalizeGeneratedRecipe, ragTargetRelPath } from './ragRecipeNormalizer';
 
 /**
  * "Generate RAG Corpus format" (Settings) — turns an arbitrary uploaded
@@ -24,6 +24,11 @@ import { normalizeGeneratedRecipe, slugify } from './ragRecipeNormalizer';
 export interface UploadedFile {
   fileName: string;
   content: string;
+  /** Folder path this file lived at inside an uploaded project/framework
+   * zip (see zipReader.ts) — empty/undefined for a directly dropped single
+   * file. Used to mirror the original directory structure under
+   * `.github/rag/` (see `ragTargetRelPath()` in ragRecipeNormalizer.ts). */
+  relativePath?: string;
 }
 
 export interface GenerationProgress {
@@ -63,7 +68,9 @@ export async function generateRagCorpus(options: GenerateRagCorpusOptions): Prom
   let failed = 0;
 
   // One batch-level overwrite confirmation rather than one dialog per file.
-  const targets = files.map((f) => `${slugify(path.basename(f.fileName, path.extname(f.fileName)))}.md`);
+  // Each target is a full relative path (e.g. "src/db/postgres-helper.md")
+  // so two same-named files from different zip folders never collide.
+  const targets = files.map((f) => ragTargetRelPath(f.fileName, f.relativePath));
   const existing = new Set<string>();
   for (const targetName of new Set(targets)) {
     try {
@@ -96,7 +103,14 @@ export async function generateRagCorpus(options: GenerateRagCorpusOptions): Prom
       await sendPrompt(modelId, prompt, (chunk) => (response += chunk), cancellationToken);
 
       const { content, usedFallback, fallbackReason } = normalizeGeneratedRecipe(file.fileName, response);
-      const targetUri = vscode.Uri.joinPath(ragFolder, targetName);
+      const targetSegments = targetName.split('/');
+      if (targetSegments.length > 1) {
+        // Recreate the original folder structure (e.g. "src/db") before
+        // writing — vscode.workspace.fs.createDirectory creates any
+        // missing intermediate directories too, like `mkdir -p`.
+        await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(ragFolder, ...targetSegments.slice(0, -1)));
+      }
+      const targetUri = vscode.Uri.joinPath(ragFolder, ...targetSegments);
       await vscode.workspace.fs.writeFile(targetUri, new TextEncoder().encode(content));
 
       succeeded += 1;

@@ -1,13 +1,24 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
 import { LANGUAGE_VERSIONS, Language, ObjectSpySettings, SettingsStore } from '../settings/settingsStore';
 import { listCopilotModels } from '../llm/copilotClient';
 import { generateRagCorpus, GenerationProgress, UploadedFile } from '../rag/ragCorpusGenerator';
+import { unzip } from '../rag/zipReader';
+import { isNoiseDirectoryPath, isSupportedRagSourceFile } from '../rag/ragUploadFilters';
+
+/** Same per-file cap the drop zone enforces for a directly-dropped file
+ * (settingsPanel.ts webview script's RAG_MAX_FILE_BYTES) — applied again
+ * here to every individual entry extracted from an uploaded zip, since a
+ * whole project archive can easily contain a file far larger than anyone
+ * would drop by hand. */
+const RAG_MAX_ZIP_ENTRY_BYTES = 200 * 1024;
 
 type InboundMessage =
   | { type: 'update'; payload: Partial<ObjectSpySettings> }
   | { type: 'listModels' }
   | { type: 'openArchitectureDoc' }
-  | { type: 'generateRagCorpus'; payload: { files: UploadedFile[] } };
+  | { type: 'generateRagCorpus'; payload: { files: UploadedFile[] } }
+  | { type: 'expandRagZip'; payload: { fileName: string; base64: string } };
 
 /**
  * The Settings menu — deliberately a separate webview panel from the main
@@ -80,6 +91,51 @@ export class SettingsPanel implements vscode.Disposable {
       await this.openArchitectureDoc();
     } else if (message.type === 'generateRagCorpus') {
       await this.handleGenerateRagCorpus(message.payload.files);
+    } else if (message.type === 'expandRagZip') {
+      await this.handleExpandRagZip(message.payload.fileName, message.payload.base64);
+    }
+  }
+
+  /**
+   * Front-end companion to the "Generate RAG Corpus format" drop zone
+   * accepting a whole project/framework as a single `.zip` (settingsPanel.ts
+   * webview script) — a webview has no Node `zlib`, so the actual unzip has
+   * to happen here in the extension host (zipReader.ts, dependency-free —
+   * same posture as tfidfEmbeddings.ts). Filters out noise directories
+   * (node_modules, target, .git, ...) and unsupported file types so a real
+   * project zip doesn't queue up hundreds of useless recipe generations,
+   * and caps individual entries at the same size the UI enforces for a
+   * directly dropped file — then hands the surviving files back to the
+   * webview to merge into its normal pending-file list, exactly as if each
+   * had been dropped individually (folder structure preserved via
+   * `relativePath`, see ragRecipeNormalizer.ts's `ragTargetRelPath()`).
+   */
+  private async handleExpandRagZip(fileName: string, base64: string): Promise<void> {
+    try {
+      const buffer = Buffer.from(base64, 'base64');
+      const entries = unzip(buffer);
+      const files: { fileName: string; relativePath: string; content: string }[] = [];
+      let skipped = 0;
+      for (const entry of entries) {
+        if (entry.isDirectory) {
+          continue;
+        }
+        const normalized = entry.path.replace(/^\/+/, '');
+        const baseName = path.posix.basename(normalized);
+        const dirPath = path.posix.dirname(normalized);
+        const relativePath = dirPath === '.' ? '' : dirPath;
+        if (isNoiseDirectoryPath(relativePath) || !isSupportedRagSourceFile(baseName) || entry.content.byteLength > RAG_MAX_ZIP_ENTRY_BYTES) {
+          skipped += 1;
+          continue;
+        }
+        files.push({ fileName: baseName, relativePath, content: entry.content.toString('utf-8') });
+      }
+      this.panel?.webview.postMessage({ type: 'ragZipExpanded', payload: { fileName, files, skippedCount: skipped } });
+    } catch (err) {
+      this.panel?.webview.postMessage({
+        type: 'ragZipExpanded',
+        payload: { fileName, files: [], skippedCount: 0, error: err instanceof Error ? err.message : String(err) }
+      });
     }
   }
 
@@ -421,19 +477,22 @@ export class SettingsPanel implements vscode.Disposable {
 
   <h2>Generate RAG Corpus Format</h2>
   <p class="note" style="margin-top: 0;">
-    Drop existing helper/config files below — SoftPlay asks Copilot to turn each one into a well-structured reusable-component
-    recipe and saves it into <code>.github/rag/</code> (creating that folder if it doesn't exist yet), named after the
-    original file. Requires "Link with GitHub Copilot LLM" (Control Panel) and a model picked above.
+    Drop existing helper/config files below — or drop a single <code>.zip</code> of an entire project/framework (Java,
+    Python, Scala, ...) and SoftPlay will unzip it, keep only supported source/config files (skipping
+    <code>node_modules</code>, <code>.git</code>, build output, etc.), and generate a recipe for each — preserving the
+    original folder structure under <code>.github/rag/</code>. SoftPlay asks Copilot to turn each file into a
+    well-structured reusable-component recipe (creating <code>.github/rag/</code> if it doesn't exist yet). Requires
+    "Link with GitHub Copilot LLM" (Control Panel) and a model picked above.
   </p>
   <div id="ragDropZone" class="rag-dropzone">
-    <span>Drop files here, or</span>
+    <span>Drop files or a project <code>.zip</code> here, or</span>
     <button type="button" id="ragBrowseBtn" class="btn btn-secondary">Choose Files…</button>
     <input
       type="file"
       id="ragFileInput"
       multiple
       hidden
-      accept=".java,.py,.js,.ts,.jsx,.tsx,.sh,.bash,.zsh,.bat,.cmd,.ps1,.json,.xml,.yml,.yaml,.properties,.ini,.toml,.sql,.scala,.kt,.kts,.rb,.go,.cs,.gradle,.groovy,.conf,.cfg,.env.example,.md,.txt"
+      accept=".java,.py,.js,.ts,.jsx,.tsx,.sh,.bash,.zsh,.bat,.cmd,.ps1,.json,.xml,.yml,.yaml,.properties,.ini,.toml,.sql,.scala,.kt,.kts,.rb,.go,.cs,.gradle,.groovy,.conf,.cfg,.env.example,.md,.txt,.zip"
     />
   </div>
   <div id="ragFileList" class="rag-file-list"></div>
@@ -484,7 +543,22 @@ export class SettingsPanel implements vscode.Disposable {
       // guard against a pathological paste bloating the Copilot prompt —
       // this content is read entirely into memory and sent as-is.
       const RAG_MAX_FILE_BYTES = 200 * 1024;
-      let ragPendingFiles = []; // { fileName, content }
+      // A whole project/framework zip is a different scale of upload than
+      // a hand-picked file — generous enough for a real small-to-medium
+      // repo, small enough that reading it into memory + base64-encoding
+      // it for the postMessage to the extension host stays snappy.
+      const RAG_MAX_ZIP_BYTES = 25 * 1024 * 1024;
+      let ragPendingFiles = []; // { fileName, relativePath, content }
+
+      function arrayBufferToBase64(buffer) {
+        let binary = '';
+        const bytes = new Uint8Array(buffer);
+        const chunkSize = 0x8000;
+        for (let i = 0; i < bytes.length; i += chunkSize) {
+          binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+        }
+        return btoa(binary);
+      }
 
       function ragAppendProgressLine(fileName, status, message) {
         ragProgressEl.hidden = false;
@@ -503,8 +577,9 @@ export class SettingsPanel implements vscode.Disposable {
 
           const name = document.createElement('span');
           name.className = 'rag-file-name';
-          name.textContent = file.fileName;
-          name.title = file.fileName;
+          const displayName = (file.relativePath ? file.relativePath + '/' : '') + file.fileName;
+          name.textContent = displayName;
+          name.title = displayName;
 
           const size = document.createElement('span');
           size.className = 'rag-file-size';
@@ -529,25 +604,38 @@ export class SettingsPanel implements vscode.Disposable {
       }
 
       function ragAddFiles(fileList) {
-        const reads = Array.from(fileList).map((file) => {
-          return new Promise((resolve) => {
-            if (file.size > RAG_MAX_FILE_BYTES) {
-              ragAppendProgressLine(file.name, 'error', 'Skipped — larger than 200 KB.');
-              resolve(null);
+        Array.from(fileList).forEach((file) => {
+          const isZip =
+            /\.zip$/i.test(file.name) || file.type === 'application/zip' || file.type === 'application/x-zip-compressed';
+          if (isZip) {
+            if (file.size > RAG_MAX_ZIP_BYTES) {
+              ragAppendProgressLine(file.name, 'error', 'Skipped — zip larger than 25 MB.');
               return;
             }
+            ragAppendProgressLine(file.name, 'started', 'Reading zip and extracting supported files…');
             const reader = new FileReader();
-            reader.onload = () => resolve({ fileName: file.name, content: String(reader.result || '') });
-            reader.onerror = () => {
-              ragAppendProgressLine(file.name, 'error', 'Could not read this file.');
-              resolve(null);
+            reader.onload = () => {
+              vscode.postMessage({
+                type: 'expandRagZip',
+                payload: { fileName: file.name, base64: arrayBufferToBase64(reader.result) }
+              });
             };
-            reader.readAsText(file);
-          });
-        });
-        Promise.all(reads).then((results) => {
-          results.filter(Boolean).forEach((file) => ragPendingFiles.push(file));
-          ragUpdateFileListUI();
+            reader.onerror = () => ragAppendProgressLine(file.name, 'error', 'Could not read this zip file.');
+            reader.readAsArrayBuffer(file);
+            return;
+          }
+
+          if (file.size > RAG_MAX_FILE_BYTES) {
+            ragAppendProgressLine(file.name, 'error', 'Skipped — larger than 200 KB.');
+            return;
+          }
+          const reader = new FileReader();
+          reader.onload = () => {
+            ragPendingFiles.push({ fileName: file.name, relativePath: '', content: String(reader.result || '') });
+            ragUpdateFileListUI();
+          };
+          reader.onerror = () => ragAppendProgressLine(file.name, 'error', 'Could not read this file.');
+          reader.readAsText(file);
         });
       }
 
@@ -582,7 +670,7 @@ export class SettingsPanel implements vscode.Disposable {
         ragProgressEl.innerHTML = '';
         vscode.postMessage({
           type: 'generateRagCorpus',
-          payload: { files: ragPendingFiles.map((f) => ({ fileName: f.fileName, content: f.content })) }
+          payload: { files: ragPendingFiles.map((f) => ({ fileName: f.fileName, relativePath: f.relativePath || '', content: f.content })) }
         });
       });
 
@@ -665,6 +753,18 @@ export class SettingsPanel implements vscode.Disposable {
         const message = event.data;
         if (message.type === 'models') {
           renderModels(message.payload);
+          return;
+        }
+        if (message.type === 'ragZipExpanded') {
+          const p = message.payload;
+          if (p.error) {
+            ragAppendProgressLine(p.fileName, 'error', 'Could not read as a zip — ' + p.error);
+          } else {
+            p.files.forEach((f) => ragPendingFiles.push(f));
+            ragUpdateFileListUI();
+            const skippedNote = p.skippedCount ? ', skipped ' + p.skippedCount + ' (unsupported type or excluded folder)' : '';
+            ragAppendProgressLine(p.fileName, 'success', 'Extracted ' + p.files.length + ' supported file(s)' + skippedNote + '.');
+          }
           return;
         }
         if (message.type === 'ragGenerationProgress') {

@@ -6,20 +6,24 @@ import { buildRagIndex, RagIndex } from './ragIndexBuilder';
 export type { RagIndex } from './ragIndexBuilder';
 
 /**
- * The vscode-aware half of RAG indexing — finds `.github/rag/*.md`,
- * parses each one (ragFrontmatter.ts), and hands the result to
- * ragIndexBuilder.ts's pure `buildRagIndex()`. Uses `vscode.workspace.fs`
- * rather than plain `fs` (matching cache/fileCache.ts's
- * `readWorkspaceFileCached()`) so this keeps working in virtual/remote
- * workspaces, not just a local disk checkout.
+ * The vscode-aware half of RAG indexing — finds every `.md` file under
+ * `.github/rag/`, recursively (a project/framework zip dropped on
+ * "Generate RAG Corpus format" preserves its own folder structure there —
+ * see ragCorpusGenerator.ts, zipReader.ts — so retrieval has to walk every
+ * subfolder too, not just the top level), parses each one
+ * (ragFrontmatter.ts), and hands the result to ragIndexBuilder.ts's pure
+ * `buildRagIndex()`. Uses `vscode.workspace.findFiles` (glob-based, so
+ * recursion is a one-line pattern rather than a hand-rolled directory walk)
+ * so this keeps working in virtual/remote workspaces, not just a local disk
+ * checkout.
  *
  * Cached in-memory, invalidated by a fingerprint of every recipe file's
- * name + mtime + size — the same "re-read only when something actually
+ * path + mtime + size — the same "re-read only when something actually
  * changed" idea as cache/fileCache.ts, just fingerprinting a whole
- * directory's listing instead of one file. A missing `.github/rag` folder,
- * or one with no valid `.md` recipes, resolves to `undefined` — always
- * treated as "retrieval has nothing to offer right now," never as an
- * error a user needs to fix before generating code.
+ * directory tree's listing instead of one file. A missing `.github/rag`
+ * folder, or one with no valid `.md` recipes anywhere under it, resolves to
+ * `undefined` — always treated as "retrieval has nothing to offer right
+ * now," never as an error a user needs to fix before generating code.
  */
 
 const RAG_FOLDER_SEGMENTS = ['.github', 'rag'];
@@ -35,11 +39,11 @@ interface CachedIndex {
 
 let cached: CachedIndex | undefined;
 
-async function computeFingerprint(folder: vscode.Uri, mdFileNames: string[]): Promise<string> {
+async function computeFingerprint(uris: vscode.Uri[]): Promise<string> {
   const stats = await Promise.all(
-    mdFileNames.map(async (name) => {
-      const stat = await vscode.workspace.fs.stat(vscode.Uri.joinPath(folder, name));
-      return `${name}:${stat.mtime}:${stat.size}`;
+    uris.map(async (uri) => {
+      const stat = await vscode.workspace.fs.stat(uri);
+      return `${uri.fsPath}:${stat.mtime}:${stat.size}`;
     })
   );
   return stats.sort().join('|');
@@ -53,29 +57,25 @@ async function computeFingerprint(folder: vscode.Uri, mdFileNames: string[]): Pr
  * this function needing to know how. */
 export async function getOrBuildRagIndex(workspaceRoot: vscode.Uri, onWarn?: (message: string) => void): Promise<RagIndex | undefined> {
   const folder = ragFolderUri(workspaceRoot);
-  let entries: [string, vscode.FileType][];
+  let mdFiles: vscode.Uri[];
   try {
-    entries = await vscode.workspace.fs.readDirectory(folder);
+    mdFiles = await vscode.workspace.findFiles(new vscode.RelativePattern(folder, '**/*.md'));
   } catch {
     return undefined;
   }
 
-  const mdFileNames = entries
-    .filter(([name, type]) => type === vscode.FileType.File && name.toLowerCase().endsWith('.md'))
-    .map(([name]) => name);
-  if (mdFileNames.length === 0) {
+  if (mdFiles.length === 0) {
     cached = undefined;
     return undefined;
   }
 
-  const fingerprint = await computeFingerprint(folder, mdFileNames);
+  const fingerprint = await computeFingerprint(mdFiles);
   if (cached && cached.fingerprint === fingerprint) {
     return cached.index;
   }
 
   const recipes: RagRecipe[] = [];
-  for (const name of mdFileNames) {
-    const uri = vscode.Uri.joinPath(folder, name);
+  for (const uri of mdFiles) {
     let content: string;
     let mtimeMs: number;
     try {

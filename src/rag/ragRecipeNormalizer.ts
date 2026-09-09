@@ -20,6 +20,27 @@ export function slugify(fileBaseName: string): string {
   return slug || 'component';
 }
 
+/** Computes where a generated recipe should be saved under `.github/rag`,
+ * preserving the original folder structure when the upload was an entire
+ * project/framework zip (see zipReader.ts, ragCorpusGenerator.ts) — a file
+ * uploaded at `src/main/java/com/acme/PostgresHelper.java` with
+ * `relativePath` `src/main/java/com/acme` lands at
+ * `.github/rag/src/main/java/com/acme/postgres-helper.md`, so two
+ * same-named helpers from different folders never collide into one file.
+ * A directly-dropped single file (no `relativePath`) lands directly under
+ * `.github/rag/`, exactly as before this. Every path segment is slugified
+ * and `.`/`..` segments are dropped, so this can never traverse outside
+ * `.github/rag` regardless of what a zip's internal paths contain. */
+export function ragTargetRelPath(fileName: string, relativePath?: string): string {
+  const baseName = slugify(path.basename(fileName, path.extname(fileName)));
+  const segments = (relativePath || '')
+    .split(/[\\/]+/)
+    .map((segment) => segment.trim())
+    .filter((segment) => segment.length > 0 && segment !== '.' && segment !== '..')
+    .map((segment) => slugify(segment));
+  return [...segments, `${baseName}.md`].join('/');
+}
+
 export function guessLanguageFromExtension(fileName: string): RagFrontmatter['language'] {
   const ext = path.extname(fileName).toLowerCase();
   if (ext === '.java') return ['java'];

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
-import { normalizeGeneratedRecipe } from '../../src/rag/ragRecipeNormalizer';
+import { normalizeGeneratedRecipe, ragTargetRelPath } from '../../src/rag/ragRecipeNormalizer';
 import { parseRagFile } from '../../src/rag/ragFrontmatter';
 
 const WELL_FORMED_RESPONSE = `---
@@ -71,4 +71,30 @@ test('the fallback body preserves the full original response text (minus an oute
   const result = normalizeGeneratedRecipe('query.sql', responseWithNoFrontmatter);
   assert.equal(result.usedFallback, true);
   assert.match(result.content, /SELECT 1;/);
+});
+
+test('ragTargetRelPath with no relativePath saves directly under .github/rag, unchanged from before zip support', () => {
+  assert.equal(ragTargetRelPath('PostgresHelper.java'), 'postgreshelper.md');
+  assert.equal(ragTargetRelPath('PostgresHelper.java', ''), 'postgreshelper.md');
+});
+
+test('ragTargetRelPath mirrors a zip entry\'s original folder structure', () => {
+  assert.equal(
+    ragTargetRelPath('PostgresHelper.java', 'src/main/java/com/acme'),
+    'src/main/java/com/acme/postgreshelper.md'
+  );
+});
+
+test('ragTargetRelPath slugifies each folder segment, not just the filename', () => {
+  assert.equal(ragTargetRelPath('Db.py', 'My Project/Db Utils'), 'my-project/db-utils/db.md');
+});
+
+test('ragTargetRelPath drops "." and ".." segments rather than traversing out of .github/rag', () => {
+  assert.equal(ragTargetRelPath('Db.py', '../../etc/./passwd-ish'), 'etc/passwd-ish/db.md');
+});
+
+test('ragTargetRelPath keeps two same-named files from different folders from colliding', () => {
+  const javaTarget = ragTargetRelPath('Helper.java', 'src/java');
+  const pythonTarget = ragTargetRelPath('Helper.py', 'src/python');
+  assert.notEqual(javaTarget, pythonTarget);
 });
