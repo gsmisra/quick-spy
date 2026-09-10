@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { parseFeatureFile, buildFilteredScenarioText, GherkinFeature, GherkinScenario } from '../bdd/gherkinParser';
+import { parseFeatureFile, buildFilteredScenarioText, buildFilteredScenarioParts, GherkinFeature, GherkinScenario } from '../bdd/gherkinParser';
 import { highlightGherkin, escapeHtml } from '../bdd/gherkinHighlight';
 import { deriveJavaClassName, derivePythonModuleName } from '../bdd/testNaming';
 
@@ -23,6 +23,17 @@ export interface LinkedScenario {
    * sent in full — Background steps aren't individually selectable, only a
    * scenario's own steps are. */
   backgroundRawText: string | undefined;
+  /** `rawText` broken back out into its individual SELECTED step texts (in
+   * order) plus this scenario's own Examples block text(s) — the SAME
+   * pieces `rawText` is joined from (see `buildFilteredScenarioParts()`),
+   * exposed separately for rag/ragOperationPlanner.ts's per-operation
+   * retrieval (Phase 3): one RAG retrieval call per selected step, rather
+   * than one call for the whole flattened scenario text, so a scenario
+   * needing 3 different capabilities isn't limited by a single query's own
+   * top-k. Never includes a deselected step — same guarantee as `rawText`
+   * itself. */
+  stepTexts: string[];
+  exampleTexts: string[];
   /** How many of the scenario's own steps the user left checked / how many
    * it has in total — surfaced in the Control Panel badge and the Output
    * channel log so it's always visible when the AI context is a subset. */
@@ -200,6 +211,7 @@ export class FeatureFilePanel implements vscode.Disposable {
       const selectedStepIndices = Array.from(new Set(message.payload.selectedStepIndices)).filter((idx) =>
         validIndices.has(idx)
       );
+      const parts = buildFilteredScenarioParts(scenario, selectedStepIndices);
       this.onScenarioSelected({
         featureName: this.feature.name,
         featureFilePath: this.filePath,
@@ -207,6 +219,8 @@ export class FeatureFilePanel implements vscode.Disposable {
         scenarioKind: scenario.kind,
         rawText: buildFilteredScenarioText(scenario, selectedStepIndices),
         backgroundRawText: this.feature.background?.rawText,
+        stepTexts: parts.stepTexts,
+        exampleTexts: parts.exampleTexts,
         selectedStepCount: selectedStepIndices.length,
         totalStepCount: scenario.steps.length,
         javaClassName: deriveJavaClassName(scenario.name),

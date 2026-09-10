@@ -7,17 +7,32 @@ import { SettingsPanel } from './settingsPanel';
 import { FeatureFilePanel, LinkedScenario } from './featureFilePanel';
 import { AiCodePanel } from './aiCodePanel';
 import { GeneratedFeaturePanel } from './generatedFeaturePanel';
-import { CopilotUnavailableError, countModelTokens, extractCodeBlock, sendPrompt } from '../llm/copilotClient';
+import { CopilotUnavailableError, countModelTokens, extractCodeBlock, findModel, PromptTooLargeError, sendPrompt, sendPromptWithModel } from '../llm/copilotClient';
+import { PROMPT_TOKEN_SAFETY_MARGIN } from '../llm/tokenBudget';
 import { checkEnvironment } from '../execution/environmentCheck';
 import { executeGeneratedCode } from '../execution/testExecutor';
-import { ApiRequestDetails, SecretEncryptor, buildApiRequestSummary, hasApiRequest } from '../api/apiRequestDetails';
+import { ApiRequestDetails, SecretEncryptor, buildApiRequestSummary, extractApiBodyFieldNames, hasApiRequest } from '../api/apiRequestDetails';
 import { readFileCachedSync, readWorkspaceFileCached } from '../cache/fileCache';
 import * as secretVault from '../security/secretVault';
 import { encryptPasswordLiteralsInCode } from '../security/uiPasswordRedactor';
 import { encryptCredentialsInFreeText } from '../security/chatInstructionRedactor';
 import { runVerifyFixAgent } from '../agent/verifyFixOrchestrator';
 import { getOrBuildRagIndex } from '../rag/ragIndexer';
-import { retrieveRagMatches, formatRagPromptSection, RagMatch } from '../rag/ragRetriever';
+import { getOrBuildFreshnessReport, FreshnessReport } from '../rag/ragFreshnessService';
+import { resolveHybridRetrieveMatches } from '../rag/ragHybridConfig';
+import { RAG_DRAFTS_FOLDER_SEGMENTS } from '../rag/ragCorpusGenerator';
+import { parseRagFile } from '../rag/ragFrontmatter';
+import { formatRagPromptSection, RagMatch } from '../rag/ragRetriever';
+import {
+  planOperationsFromGherkinSteps,
+  planOperationFromApiRequest,
+  planUnstructuredOperation,
+  withSharedContext,
+  OperationPlan
+} from '../rag/ragOperationPlanner';
+import { retrieveForOperations, OperationRagCandidate } from '../rag/ragOperationRetrieval';
+import { packOperationCandidates, PackingDiagnostics } from '../rag/ragOperationPacking';
+import { prependRagTraceabilityBanner } from './ragTraceabilityBanner';
 import { AgenticModeController } from '../agentic/agenticModeController';
 import { AgenticIngestionPanel } from './agenticIngestionPanel';
 import { getAgenticModeSidebarHtml } from './agenticModeSidebarView';
@@ -614,7 +629,59 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
     // send (see chatInstructionRedactor.ts) — measuring the un-redacted
     // chat text would under/over-count relative to what's actually sent.
     const measuredCustomInstructions = (await encryptCredentialsInFreeText(this.context, customInstructions)).text;
-    const { section: ragSection } = await this.buildRagSection(settings, isApiMode, measuredCode, apiDetails, measuredCustomInstructions);
+    // Same "measure the mandatory prompt first, then pack RAG against what's
+    // actually left" flow as runLlmRefinement() — see buildRagSection()'s
+    // own doc comment. Built once with an empty RAG section purely to get
+    // an accurate mandatory-token count for packing; the FINAL prompt below
+    // is what's actually shown as the estimate.
+    const mandatoryPromptForEstimate = isApiMode
+      ? await buildApiLlmPrompt(
+          settings.language,
+          settings.languageVersion,
+          builtIn,
+          instructions,
+          apiDetails!,
+          measuredCustomInstructions,
+          this.getEncryptSecret(),
+          '',
+          this.linkedScenario,
+          this.currentSuggestedBaseName()
+        )
+      : buildLlmPrompt(
+          settings.language,
+          settings.languageVersion,
+          settings.browserChannel,
+          builtIn,
+          instructions,
+          measuredCode,
+          measuredCustomInstructions,
+          '',
+          this.linkedScenario,
+          this.currentSuggestedBaseName()
+        );
+    // F12: resolve ONE model and reuse it for every measurement below,
+    // rather than each of the three token counts independently
+    // re-resolving by model id string (countModelTokens's own internal
+    // findModel() call, three times over, on every debounced estimate).
+    const model = await findModel(settings.copilotModelId);
+    const mandatoryTokensForEstimate = model
+      ? await (async () => {
+          try {
+            return await model.countTokens(mandatoryPromptForEstimate);
+          } catch {
+            return undefined;
+          }
+        })()
+      : undefined;
+    const { section: ragSection } = await this.buildRagSection(
+      settings,
+      isApiMode,
+      measuredCode,
+      apiDetails,
+      measuredCustomInstructions,
+      mandatoryTokensForEstimate,
+      model
+    );
     const prompt = isApiMode
       ? await buildApiLlmPrompt(
           settings.language,
@@ -641,11 +708,19 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
           this.currentSuggestedBaseName()
         );
 
-    const result = await countModelTokens(settings.copilotModelId, prompt);
+    const sentTokens = model
+      ? await (async () => {
+          try {
+            return await model.countTokens(prompt);
+          } catch {
+            return undefined;
+          }
+        })()
+      : undefined;
     if (seq !== this.tokenEstimateSeq) {
       return; // superseded by a newer draft/model change while this was in flight
     }
-    if (!result) {
+    if (sentTokens === undefined || !model) {
       this.webview?.postMessage({
         type: 'tokenEstimate',
         payload: { available: false, reason: 'Could not reach the selected Copilot model to estimate tokens.' }
@@ -656,9 +731,9 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
       type: 'tokenEstimate',
       payload: {
         available: true,
-        sentTokens: result.count,
+        sentTokens,
         receivedTokens: this.lastReceivedTokens,
-        maxInputTokens: result.maxInputTokens,
+        maxInputTokens: model.maxInputTokens,
         modelId: settings.copilotModelId
       }
     });
@@ -760,19 +835,64 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
   /** Refreshes BOTH file lists in the "Custom Instructions & RAG Data"
    * segment from one button — Custom Instructions (`.github/*.md`,
    * explicitly EXCLUDING `.github/rag/**` now that that subfolder has its
-   * own distinct meaning — see rag/ragIndexer.ts) and RAG Data
-   * (`.github/rag/*.md`, read-only: which components are relevant to a
-   * given request is decided automatically by retrieval scoring, not by
-   * checking a box here — see rag/ragRetriever.ts). */
+   * own distinct meaning — see rag/ragIndexer.ts — AND `.github/rag-drafts/**`,
+   * where a REJECTED "Generate RAG Corpus format" candidate is quarantined
+   * — see ragCorpusGenerator.ts's own doc comment. Without this second
+   * exclusion, a rejected draft (which can still contain a credential-
+   * shaped value the deterministic scrubber only guarantees to catch, not
+   * a model's own prompt-only "don't do this" instruction — see F06)
+   * could be explicitly selected here and re-sent into a future prompt,
+   * defeating the whole point of quarantining it outside the indexed
+   * corpus in the first place) and RAG Data (`.github/rag/*.md`,
+   * read-only: which components are relevant to a given request is
+   * decided automatically by retrieval scoring, not by checking a box
+   * here — see rag/ragRetriever.ts). */
   private async refreshPromptFiles(): Promise<void> {
+    const excludedRagFolders = `{.github/rag/**,${RAG_DRAFTS_FOLDER_SEGMENTS.join('/')}/**}`;
     const [instructionFiles, ragFiles] = await Promise.all([
-      vscode.workspace.findFiles('.github/**/*.md', '.github/rag/**'),
+      vscode.workspace.findFiles('.github/**/*.md', excludedRagFolders),
       vscode.workspace.findFiles('.github/rag/**/*.md')
     ]);
     const relPaths = instructionFiles.map((f) => vscode.workspace.asRelativePath(f)).sort();
-    const ragRelPaths = ragFiles.map((f) => vscode.workspace.asRelativePath(f)).sort();
+    const { indexed, skipped } = await this.partitionRagFilesByValidity(ragFiles);
     this.webview?.postMessage({ type: 'promptFiles', payload: relPaths });
-    this.webview?.postMessage({ type: 'ragFiles', payload: ragRelPaths });
+    this.webview?.postMessage({ type: 'ragFiles', payload: indexed });
+    // F16 — the "RAG Data" list previously showed every *.md file found
+    // under .github/rag/ regardless of whether it would actually be
+    // indexed (a file with no/invalid YAML frontmatter — e.g. a plain
+    // documentation/blueprint doc someone dropped in there — silently
+    // never participates in retrieval at all), a visible-library/
+    // empty-index mismatch a user had no way to notice from the file list
+    // alone. Now surfaced explicitly, with the reason, per skipped file.
+    for (const { relPath, reason } of skipped) {
+      this.outputChannel.appendLine(`Reusable components (RAG): "${relPath}" was found under .github/rag/ but is NOT indexed (${reason}) — it will never be retrieved.`);
+    }
+  }
+
+  /** Splits `ragFiles` into ones that will actually be indexed (valid
+   * frontmatter) and ones that won't, with a reason — see
+   * `refreshPromptFiles()`'s own doc comment. A read/parse failure other
+   * than "invalid frontmatter" is reported the same way, under the same
+   * "not indexed" umbrella — from a user's perspective the practical fact
+   * (this file will never be retrieved) is identical either way. */
+  private async partitionRagFilesByValidity(ragFiles: vscode.Uri[]): Promise<{ indexed: string[]; skipped: { relPath: string; reason: string }[] }> {
+    const indexed: string[] = [];
+    const skipped: { relPath: string; reason: string }[] = [];
+    for (const uri of ragFiles) {
+      const relPath = vscode.workspace.asRelativePath(uri);
+      try {
+        const bytes = await vscode.workspace.fs.readFile(uri);
+        const parsed = parseRagFile(new TextDecoder('utf-8').decode(bytes));
+        if (parsed.ok) {
+          indexed.push(relPath);
+        } else {
+          skipped.push({ relPath, reason: parsed.error });
+        }
+      } catch (err) {
+        skipped.push({ relPath, reason: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    return { indexed: indexed.sort(), skipped };
   }
 
   /** "Start AI Code Generation" (Control Panel) — the ONLY way AI processing
@@ -1437,90 +1557,196 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
 
     this.postLlmStart();
 
-    const builtIn = isApiMode ? readApiAutomationInstructions() : readSeniorQeInstructions();
-    // Auto Password Encryption — never send a recorded password/credential
-    // literal to Copilot in plaintext (see security/uiPasswordRedactor.ts).
-    // Applied here, once, right before the prompt is built — the sidebar's
-    // own "Generated Code" view keeps showing Codegen's real, unmodified
-    // output regardless (see ObjectSpyPanel's class doc comment).
-    let encryptedCount = 0;
-    if (!isApiMode) {
-      const redacted = await encryptPasswordLiteralsInCode(this.context, playwrightCode, settings.language);
-      playwrightCode = redacted.code;
-      encryptedCount = redacted.count;
-    }
-    // Same guarantee, extended to the free-text "Instant instructions to
-    // LLM" chat box — see security/chatInstructionRedactor.ts's own doc
-    // comment for why this was a real gap (a connection string or
-    // "password: ..." typed directly into chat previously reached Copilot
-    // completely in plaintext, in BOTH automation modes).
-    const chatRedaction = await encryptCredentialsInFreeText(this.context, customInstructions);
-    customInstructions = chatRedaction.text;
-    encryptedCount += chatRedaction.count;
-    const { section: ragSection, matches: ragMatches } = await this.buildRagSection(settings, isApiMode, playwrightCode, apiDetails, customInstructions);
-    const prompt = isApiMode
-      ? await buildApiLlmPrompt(
-          settings.language,
-          settings.languageVersion,
-          builtIn,
-          instructions,
-          apiDetails!,
-          customInstructions,
-          this.getEncryptSecret(),
-          ragSection,
-          this.linkedScenario,
-          this.currentSuggestedBaseName()
-        )
-      : buildLlmPrompt(
-          settings.language,
-          settings.languageVersion,
-          settings.browserChannel,
-          builtIn,
-          instructions,
-          playwrightCode,
-          customInstructions,
-          ragSection,
-          this.linkedScenario,
-          this.currentSuggestedBaseName()
-        );
-    // Diagnostic trail for exactly the question "was X actually sent, and
-    // did a response come back?" — check the SoftPlay Output channel
-    // (View -> Output -> SoftPlay) rather than needing to guess from a
-    // stuck "(generating…)" label with no other visible signal.
-    if (encryptedCount > 0) {
-      this.outputChannel.appendLine(`Auto Password Encryption: encrypted ${encryptedCount} credential value(s) before sending to Copilot.`);
-    }
-    const instructionFileChars = instructions.reduce((sum, f) => sum + f.content.length, 0);
-    this.outputChannel.appendLine(
-      `Sending to Copilot model "${settings.copilotModelId}" (${isApiMode ? 'API' : 'UI'} mode): target ` +
-        `${settings.language} ${settings.languageVersion}, mandatory standard ` +
-        `${builtIn ? `(${builtIn.length} chars)` : '(MISSING — instructions .md failed to load)'}, ` +
-        `${instructions.length} project .md file(s) (${instructionFileChars.toLocaleString()} chars), ` +
-        `RAG section (${ragSection.length.toLocaleString()} chars${ragMatches.length ? `, ${ragMatches.length} match(es): ${ragMatches.map((m) => m.id).join(', ')}` : ', no matches'}), ` +
-        `${this.linkedScenario ? `linked scenario "${this.linkedScenario.scenarioName}"` : 'no linked scenario'}, ` +
-        `${isApiMode ? `API request to ${apiDetails?.url}` : `${playwrightCode.length} chars of reference code`} — ` +
-        `prompt is ${prompt.length.toLocaleString()} chars total.`
-    );
-
+    // Everything from here through the actual Copilot call used to be split
+    // across an UNGUARDED prep section (encryption, RAG index building,
+    // prompt construction) followed by a try/catch around ONLY the
+    // streaming call itself — so a failure during prep (a recipe file
+    // deleted between the RAG index's own file scan and reading it, a
+    // secret-storage error from Auto Password Encryption, ...) propagated
+    // straight out of this method uncaught (onDidReceiveMessage's handler
+    // is fire-and-forget — see its own doc comment), leaving `postLlmStart()`
+    // as the last thing the webview ever heard: a "(generating…)" state
+    // with no way out short of reloading the panel. ONE try/catch spanning
+    // ALL of prep + the request now guarantees this method always reaches a
+    // terminal `postLlmDone`/`postLlmError`, whatever fails and whenever.
+    //
+    // `this.llmCancellation !== cts` (checked both on the success path and
+    // in the catch) is this request's identity check — cheaper than a
+    // separate counter, since a NEWER call to this method already
+    // overwrites `this.llmCancellation` with its own fresh
+    // CancellationTokenSource before doing any async work (see just above).
+    // If THIS request's own prep/streaming was still in flight when that
+    // happened, its eventual result — success or failure — must never
+    // clobber the newer request's already-in-progress UI state.
+    let ragSection = '';
+    let ragMatches: RagMatch[] = [];
+    let builtIn = '';
+    // F12 — resolved once inside the try block below and reused for the
+    // retry-without-RAG fallback in the catch block too, rather than each
+    // independently re-resolving by model id string.
+    let resolvedModel: vscode.LanguageModelChat | undefined;
     try {
-      const accumulated = await this.streamCopilotResponse(prompt, settings.copilotModelId, cts, (chunk) => this.postLlmChunk(chunk));
+      builtIn = isApiMode ? readApiAutomationInstructions() : readSeniorQeInstructions();
+      // Auto Password Encryption — never send a recorded password/credential
+      // literal to Copilot in plaintext (see security/uiPasswordRedactor.ts).
+      // Applied here, once, right before the prompt is built — the sidebar's
+      // own "Generated Code" view keeps showing Codegen's real, unmodified
+      // output regardless (see ObjectSpyPanel's class doc comment).
+      let encryptedCount = 0;
+      if (!isApiMode) {
+        const redacted = await encryptPasswordLiteralsInCode(this.context, playwrightCode, settings.language);
+        playwrightCode = redacted.code;
+        encryptedCount = redacted.count;
+      }
+      // Same guarantee, extended to the free-text "Instant instructions to
+      // LLM" chat box — see security/chatInstructionRedactor.ts's own doc
+      // comment for why this was a real gap (a connection string or
+      // "password: ..." typed directly into chat previously reached Copilot
+      // completely in plaintext, in BOTH automation modes).
+      const chatRedaction = await encryptCredentialsInFreeText(this.context, customInstructions);
+      customInstructions = chatRedaction.text;
+      encryptedCount += chatRedaction.count;
+      // Built once with an empty RAG section purely to measure the
+      // MANDATORY (non-RAG) token cost — packing (buildRagSection below)
+      // needs this to compute how much of the model's own real context
+      // window is actually left for RAG content, per Phase 3's "consume
+      // the actual resolved model/tokenizer and the assembled non-RAG
+      // input" packing requirement. `undefined` (counting unavailable)
+      // flows straight through to buildRagSection()'s own documented
+      // unmeasured fallback, never silently treated as "zero mandatory
+      // cost, unlimited RAG budget."
+      const mandatoryPrompt = isApiMode
+        ? await buildApiLlmPrompt(
+            settings.language,
+            settings.languageVersion,
+            builtIn,
+            instructions,
+            apiDetails!,
+            customInstructions,
+            this.getEncryptSecret(),
+            '',
+            this.linkedScenario,
+            this.currentSuggestedBaseName()
+          )
+        : buildLlmPrompt(
+            settings.language,
+            settings.languageVersion,
+            settings.browserChannel,
+            builtIn,
+            instructions,
+            playwrightCode,
+            customInstructions,
+            '',
+            this.linkedScenario,
+            this.currentSuggestedBaseName()
+          );
+      // F12: resolve ONE model here and reuse this SAME handle for the
+      // mandatory-token measurement, RAG packing (buildRagSection), AND
+      // the actual send below (streamCopilotResponse) — previously each
+      // of those independently re-resolved by model id string
+      // (countModelTokens/findModel each call vscode.lm.selectChatModels()
+      // on their own), so packing's own `maxInputTokens`/tokenizer could,
+      // in principle, come from a DIFFERENT resolution than what
+      // ultimately enforces the real admission check and sends the
+      // request. `undefined` when the model can't be resolved at all
+      // flows through exactly like an unmeasurable count already did —
+      // buildRagSection()'s own documented character-based fallback.
+      resolvedModel = await findModel(settings.copilotModelId);
+      const mandatoryTokens = resolvedModel
+        ? await (async () => {
+            try {
+              return await resolvedModel.countTokens(mandatoryPrompt);
+            } catch {
+              return undefined;
+            }
+          })()
+        : undefined;
+      const built = await this.buildRagSection(settings, isApiMode, playwrightCode, apiDetails, customInstructions, mandatoryTokens, resolvedModel, cts.token);
+      ragSection = built.section;
+      ragMatches = built.matches;
+      const prompt = isApiMode
+        ? await buildApiLlmPrompt(
+            settings.language,
+            settings.languageVersion,
+            builtIn,
+            instructions,
+            apiDetails!,
+            customInstructions,
+            this.getEncryptSecret(),
+            ragSection,
+            this.linkedScenario,
+            this.currentSuggestedBaseName()
+          )
+        : buildLlmPrompt(
+            settings.language,
+            settings.languageVersion,
+            settings.browserChannel,
+            builtIn,
+            instructions,
+            playwrightCode,
+            customInstructions,
+            ragSection,
+            this.linkedScenario,
+            this.currentSuggestedBaseName()
+          );
+      // Diagnostic trail for exactly the question "was X actually sent, and
+      // did a response come back?" — check the SoftPlay Output channel
+      // (View -> Output -> SoftPlay) rather than needing to guess from a
+      // stuck "(generating…)" label with no other visible signal.
+      if (encryptedCount > 0) {
+        this.outputChannel.appendLine(`Auto Password Encryption: encrypted ${encryptedCount} credential value(s) before sending to Copilot.`);
+      }
+      const instructionFileChars = instructions.reduce((sum, f) => sum + f.content.length, 0);
+      this.outputChannel.appendLine(
+        `Sending to Copilot model "${settings.copilotModelId}" (${isApiMode ? 'API' : 'UI'} mode): target ` +
+          `${settings.language} ${settings.languageVersion}, mandatory standard ` +
+          `${builtIn ? `(${builtIn.length} chars)` : '(MISSING — instructions .md failed to load)'}, ` +
+          `${instructions.length} project .md file(s) (${instructionFileChars.toLocaleString()} chars), ` +
+          `RAG section (${ragSection.length.toLocaleString()} chars${ragMatches.length ? `, ${ragMatches.length} match(es): ${ragMatches.map((m) => m.id).join(', ')}` : ', no matches'}), ` +
+          `${this.linkedScenario ? `linked scenario "${this.linkedScenario.scenarioName}"` : 'no linked scenario'}, ` +
+          `${isApiMode ? `API request to ${apiDetails?.url}` : `${playwrightCode.length} chars of reference code`} — ` +
+          `prompt is ${prompt.length.toLocaleString()} chars total.`
+      );
+
+      const accumulated = await this.streamCopilotResponse(prompt, settings.copilotModelId, cts, (chunk) => this.postLlmChunk(chunk), resolvedModel);
+      if (this.llmCancellation !== cts) {
+        return; // superseded by a newer request while this one was still in flight — its own UI update wins.
+      }
       this.outputChannel.appendLine(`Copilot response received: ${accumulated.length} chars.`);
-      const finalCode = prependRagTraceabilityBanner(extractCodeBlock(accumulated), ragMatches, settings.language);
+      const { code: finalCode, observedMatches } = prependRagTraceabilityBanner(extractCodeBlock(accumulated), ragMatches, settings.language, (p) =>
+        vscode.workspace.asRelativePath(p)
+      );
+      if (ragMatches.length > 0) {
+        // The full retrieved -> included in prompt -> call evidence
+        // OBSERVED breakdown, in one place — buildRagSection() above
+        // already logged "matched N of M indexed" (retrieved) and, when
+        // applicable, "N match(es) omitted from the prompt" (retrieved but
+        // NOT included); this closes the loop with the last step. "Observed"
+        // deliberately, not "used"/"verified" — see
+        // ragTraceabilityBanner.ts's own doc comment on why this is a
+        // heuristic textual signal, never a real call-graph verification.
+        this.outputChannel.appendLine(
+          `Reusable components (RAG): ${ragMatches.length} included in the prompt, ${observedMatches.length} with call evidence OBSERVED (heuristic) in the generated code` +
+            (observedMatches.length > 0 ? ` (${observedMatches.map((m) => m.id).join(', ')}).` : '.')
+        );
+      }
       this.postLlmDone(finalCode);
       void this.recordReceivedTokens(accumulated, settings.copilotModelId);
     } catch (err) {
-      if (cts.token.isCancellationRequested) {
-        return;
+      if (cts.token.isCancellationRequested || this.llmCancellation !== cts) {
+        return; // cancelled, or superseded by a newer request — never surface a stale result/error for it either.
       }
       const message = err instanceof CopilotUnavailableError ? err.message : describeError(err);
-      this.outputChannel.appendLine(`Copilot request failed: ${message}`);
+      this.outputChannel.appendLine(`Code generation request failed: ${message}`);
 
       // A response with genuinely zero completions from the model backend
       // (seen in practice — see isEmptyModelResponseError()'s own doc
-      // comment) is exactly the failure mode an oversized "Reusable
-      // components" RAG section combined with an already-large prompt
-      // (built-in instructions + every checked custom .md file + the full
-      // recorded/API reference code) can trigger — "Start AI Feature File
+      // comment), OR a request llm/copilotClient.ts's own token-budget
+      // preflight refused to even send (PromptTooLargeError) — either way
+      // is exactly the failure mode an oversized "Reusable components" RAG
+      // section combined with an already-large prompt (built-in
+      // instructions + every checked custom .md file + the full recorded/
+      // API reference code) can trigger — "Start AI Feature File
       // Generation" never includes RAG at all, so it keeps working fine
       // regardless, misleadingly looking like "RAG itself" is what's
       // broken. A single recipe's own body is now size-capped too (see
@@ -1529,8 +1755,12 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
       // one automatic attempt WITHOUT the RAG section, so this specific,
       // recoverable failure doesn't just dead-end on a cryptic raw
       // provider error the user has no way to act on.
-      if (ragSection && isEmptyModelResponseError(message)) {
-        this.outputChannel.appendLine('Copilot returned an empty response with RAG components included — retrying once without them...');
+      if (ragSection && (err instanceof PromptTooLargeError || isEmptyModelResponseError(message))) {
+        this.outputChannel.appendLine(
+          err instanceof PromptTooLargeError
+            ? 'Request was too large for the model with RAG components included — retrying once without them...'
+            : 'Copilot returned an empty response with RAG components included — retrying once without them...'
+        );
         const fallbackPrompt = isApiMode
           ? await buildApiLlmPrompt(
               settings.language,
@@ -1558,13 +1788,16 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
             );
         this.postLlmStart();
         try {
-          const accumulated = await this.streamCopilotResponse(fallbackPrompt, settings.copilotModelId, cts, (chunk) => this.postLlmChunk(chunk));
+          const accumulated = await this.streamCopilotResponse(fallbackPrompt, settings.copilotModelId, cts, (chunk) => this.postLlmChunk(chunk), resolvedModel);
+          if (this.llmCancellation !== cts) {
+            return; // superseded by a newer request while this retry was still in flight.
+          }
           this.outputChannel.appendLine(`Copilot response received on retry (without RAG): ${accumulated.length} chars.`);
           this.postLlmDone(extractCodeBlock(accumulated));
           void this.recordReceivedTokens(accumulated, settings.copilotModelId);
           return;
         } catch (retryErr) {
-          if (cts.token.isCancellationRequested) {
+          if (cts.token.isCancellationRequested || this.llmCancellation !== cts) {
             return;
           }
           const retryMessage = retryErr instanceof CopilotUnavailableError ? retryErr.message : describeError(retryErr);
@@ -1572,12 +1805,12 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
           // Failed even WITHOUT RAG — the RAG section was never the actual
           // bottleneck, so say so plainly rather than leaving the user
           // thinking dropping RAG should have fixed it.
-          this.postLlmError(buildEmptyResponseGuidance(retryMessage, instructions.length, false));
+          this.postLlmError(describeCopilotFailure(retryErr, retryMessage, instructions.length, ''));
           return;
         }
       }
 
-      this.postLlmError(isEmptyModelResponseError(message) ? buildEmptyResponseGuidance(message, instructions.length, !!ragSection) : message);
+      this.postLlmError(describeCopilotFailure(err, message, instructions.length, ragSection));
     }
   }
 
@@ -1593,7 +1826,8 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
     prompt: string,
     copilotModelId: string,
     cts: vscode.CancellationTokenSource,
-    onChunk: (chunk: string) => void
+    onChunk: (chunk: string) => void,
+    model?: vscode.LanguageModelChat
   ): Promise<string> {
     let accumulated = '';
     let receivedAnyChunk = false;
@@ -1619,23 +1853,26 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
           )
         )
       );
-      sendPrompt(
-        copilotModelId,
-        prompt,
-        (chunk) => {
-          receivedAnyChunk = true;
-          armTimeout(() =>
-            reject(
-              new Error(
-                `Copilot stopped responding mid-stream — no further chunk arrived within ${ObjectSpyPanel.INTER_CHUNK_TIMEOUT_MS / 1000} seconds.`
-              )
+      // F12: reuse an already-resolved model handle when given (see this
+      // method's own new `model` parameter and sendPromptWithModel()'s own
+      // doc comment) rather than sendPrompt()'s internal by-id resolution
+      // — every OTHER call site (feature-file generation, the fix-loop)
+      // omits it and gets the exact same behavior as before this
+      // parameter existed.
+      const send = (onFragment: (chunk: string) => void) =>
+        model ? sendPromptWithModel(model, prompt, onFragment, cts.token) : sendPrompt(copilotModelId, prompt, onFragment, cts.token);
+      send((chunk) => {
+        receivedAnyChunk = true;
+        armTimeout(() =>
+          reject(
+            new Error(
+              `Copilot stopped responding mid-stream — no further chunk arrived within ${ObjectSpyPanel.INTER_CHUNK_TIMEOUT_MS / 1000} seconds.`
             )
-          );
-          accumulated += chunk;
-          onChunk(chunk);
-        },
-        cts.token
-      )
+          )
+        );
+        accumulated += chunk;
+        onChunk(chunk);
+      })
         .then(() => {
           clearTimeout(timeoutHandle);
           resolve();
@@ -1669,6 +1906,57 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
     return (plaintext: string) => secretVault.encryptSecret(this.context, plaintext);
   }
 
+  /** Decomposes the current request into independently-retrievable
+   * operations (rag/ragOperationPlanner.ts, Phase 3) — one operation per
+   * SELECTED Gherkin step when a scenario is linked (never a deselected
+   * one — see LinkedScenario.stepTexts's own doc comment), one operation
+   * for an API request's method/URL + sanitized body field names, or one
+   * fallback operation wrapping the recorded Playwright code when neither
+   * applies. The chat box's free text is folded into every resulting
+   * operation as shared context (`withSharedContext()`), same treatment a
+   * scenario's own Background gets — real retrieval-relevant vocabulary,
+   * not itself a distinct capability request. */
+  private buildOperationPlan(isApiMode: boolean, playwrightCode: string, apiDetails: ApiRequestDetails | undefined, customInstructions: string): OperationPlan {
+    const basePlan = this.linkedScenario
+      ? planOperationsFromGherkinSteps(this.linkedScenario.stepTexts, this.linkedScenario.backgroundRawText, this.linkedScenario.exampleTexts)
+      : isApiMode && apiDetails
+        ? planOperationFromApiRequest(`${apiDetails.method} ${apiDetails.url}`.trim(), extractApiBodyFieldNames(apiDetails))
+        : planUnstructuredOperation(isApiMode ? '' : playwrightCode);
+    return withSharedContext(basePlan, customInstructions);
+  }
+
+  /** Logs the retrieved -> included -> operation-coverage breakdown for
+   * one RAG packing pass — kept as implementation diagnostics in the
+   * Output channel, per Phase 3's "keep implementation diagnostics in
+   * logs/inspection UI rather than adding verbose prose to every model
+   * prompt," never surfaced to the model itself. */
+  private logRagPackingResult(plan: OperationPlan, candidates: OperationRagCandidate[], includedMatches: RagMatch[], diagnostics: PackingDiagnostics | undefined): void {
+    if (candidates.length === 0) {
+      return;
+    }
+    this.outputChannel.appendLine(
+      `Reusable components (RAG): ${plan.operations.length} operation(s) planned (${plan.method}), ${candidates.length} distinct candidate(s) retrieved — ` +
+        `${candidates.map((c) => c.match.id).join(', ')}.`
+    );
+    if (includedMatches.length < candidates.length) {
+      const detail = diagnostics ? diagnostics.omitted.map((o) => `${o.id} (${o.reason})`).join(', ') : 'size cap';
+      this.outputChannel.appendLine(
+        `Reusable components (RAG): ${candidates.length - includedMatches.length} candidate(s) omitted from the prompt — ${detail}.`
+      );
+    }
+    if (diagnostics) {
+      const uncovered = diagnostics.operationCoverage.filter((c) => !c.covered);
+      if (uncovered.length > 0) {
+        this.outputChannel.appendLine(
+          `Reusable components (RAG): ${uncovered.length} of ${plan.operations.length} operation(s) have NO included RAG coverage (${uncovered.map((c) => c.operationId).join(', ')}).`
+        );
+      }
+      this.outputChannel.appendLine(
+        `Reusable components (RAG): packed section is ${diagnostics.tokensUnmeasured ? 'an UNMEASURED (char-capped) best effort' : `${diagnostics.countedTokens} measured token(s)`}.`
+      );
+    }
+  }
+
   /**
    * Builds the "Reusable components available" prompt section (see
    * rag/ragRetriever.ts) for the CURRENT request — or `''` when RAG is
@@ -1680,22 +1968,30 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
    * exactly what a real send would include, same reasoning as Auto
    * Password Encryption's own redaction pass being shared between the two).
    *
-   * The query text embedded for retrieval purposes is built from the
-   * linked Gherkin scenario (if any — the most business-language-rich
-   * signal available, e.g. "Login to Postgres database, query a specific
-   * table..."), the chat-box free text, and either the recorded Playwright
-   * code (UI mode) or the request's method+URL (API mode). This never
-   * needs Auto Password Encryption's redaction pass first — embedding is
-   * pure local arithmetic (TF-IDF, see rag/tfidfEmbeddings.ts), so nothing
-   * computed from this text ever leaves the machine, unlike the prompt
-   * text itself.
+   * Retrieves PER OPERATION (`buildOperationPlan()`/`retrieveForOperations()`
+   * — Phase 3), removing the old single-query `topK` ceiling that could
+   * never surface 3+ distinct required capabilities for one request, then
+   * packs against the ACTUAL resolved model's real remaining token budget
+   * (`mandatoryTokens` — the caller's own already-measured cost of
+   * everything else in the prompt) when that measurement is available;
+   * falls back to `formatRagPromptSection()`'s character-based packing
+   * (still benefiting from per-operation retrieval's wider coverage) when
+   * it isn't — an unmeasured request is never treated as license to
+   * over-include RAG content, only as "no live token guarantee available
+   * this time." Retrieval embedding itself never needs Auto Password
+   * Encryption's redaction pass first — it's pure local arithmetic
+   * (TF-IDF, see rag/tfidfEmbeddings.ts), so nothing computed from it ever
+   * leaves the machine, unlike the prompt text itself.
    */
   private async buildRagSection(
     settings: ObjectSpySettings,
     isApiMode: boolean,
     playwrightCode: string,
     apiDetails: ApiRequestDetails | undefined,
-    customInstructions: string
+    customInstructions: string,
+    mandatoryTokens: number | undefined,
+    model?: vscode.LanguageModelChat,
+    cancellationToken?: vscode.CancellationToken
   ): Promise<{ section: string; matches: RagMatch[] }> {
     const empty = { section: '', matches: [] as RagMatch[] };
     if (!settings.ragEnabled) {
@@ -1711,21 +2007,189 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
     if (!index) {
       return empty;
     }
-    const queryText = [
-      this.linkedScenario?.rawText,
-      customInstructions,
-      isApiMode ? `${apiDetails?.method ?? ''} ${apiDetails?.url ?? ''}`.trim() : playwrightCode
-    ]
-      .filter((part): part is string => !!part && part.trim().length > 0)
-      .join('\n');
 
-    const matches = await retrieveRagMatches(index, queryText, settings.language, settings.automationMode);
-    if (matches.length > 0) {
-      this.outputChannel.appendLine(
-        `Reusable components (RAG): matched ${matches.length} of ${index.recipes.length} indexed — ${matches.map((m) => m.id).join(', ')}.`
-      );
+    const plan = this.buildOperationPlan(isApiMode, playwrightCode, apiDetails, customInstructions);
+    if (plan.operations.length === 0) {
+      return empty;
     }
-    return { section: formatRagPromptSection(matches, settings.language), matches };
+    // Phase 6: `undefined` (the overwhelmingly common case — hybrid mode is
+    // off by default) falls straight through to retrieveForOperations()'s
+    // own default (plain lexical retrieveRagMatches()), zero behavior
+    // change. Only genuinely turns into hybrid (lexical+semantic RRF)
+    // retrieval when Settings has both the toggle AND a real
+    // endpoint/model configured — see ragHybridConfig.ts.
+    //
+    // A10: `cancellationToken` (this SAME generation request's own — the
+    // real "Start AI Code Generation" call site passes one; the live
+    // token-estimate call site has none, which is fine — see
+    // ragHybridConfig.ts's own doc comments) is bridged into a plain
+    // `AbortSignal` and forwarded to every per-operation semantic-embedding
+    // call this resolves to; `onSemanticFailure` reports a real (non-
+    // cancellation) semantic failure ONCE for this whole generation rather
+    // than once per operation.
+    const retrieveMatches = await resolveHybridRetrieveMatches(this.context, settings, {
+      cancellationToken,
+      onSemanticFailure: (message) =>
+        this.outputChannel.appendLine(`Reusable components (RAG): semantic (hybrid) retrieval failed for this request (${message}) — falling back to lexical-only matching for the rest of it.`)
+    });
+    if (retrieveMatches) {
+      this.outputChannel.appendLine('Reusable components (RAG): hybrid (lexical + semantic, RRF-fused) retrieval is active for this request.');
+    }
+
+    // Phase 5 -> Phase 3 wiring (F08/A08): a recipe whose OWN source is
+    // known stale/missing is hard-excluded from the prompt entirely,
+    // regardless of how well it otherwise scores — a recipe confirmed to
+    // no longer reflect its real source is never worth spending token
+    // budget on. Uses the CACHED report (forceRefresh: false) — this runs
+    // on every code-generation request, not just an explicit manual check,
+    // so it must stay fast; the cache invalidates itself automatically the
+    // moment a recipe or its source file actually changes (see
+    // ragFreshnessService.ts). Deliberately does NOT exclude
+    // `unverifiable`/`error`-state recipes — "can't tell" is never treated
+    // as "confirmed stale," so a legacy/hand-authored recipe with no
+    // provenance to check stays fully eligible.
+    //
+    // A08: fetched BEFORE retrieval (not after) and threaded INTO
+    // retrieveForOperations() itself — a known stale/missing recipe is now
+    // excluded from EACH operation's own per-operation top-k (and, in
+    // hybrid mode, from semantic embedding) rather than discarded from an
+    // already-truncated result afterward. Before this fix, a fresh, usable
+    // recipe ranked just outside the per-operation top-k was never even
+    // retrieved in the first place, so no amount of later filtering could
+    // recover it — reproduced case: four equally matching recipes, the
+    // top three stale, the fourth fresh; filtering only AFTER retrieval
+    // left zero eligible candidates even though a fresh, indexed helper
+    // genuinely existed.
+    const staleFilePaths = await this.getStaleRagFilePaths(workspaceRoot);
+
+    const candidates = await retrieveForOperations(index, plan.operations, settings.language, settings.automationMode, undefined, retrieveMatches, staleFilePaths);
+    if (candidates.length === 0) {
+      this.logRagPackingResult(plan, candidates, [], undefined);
+      return empty;
+    }
+
+    // F12: reuse an already-resolved model handle when the caller has one
+    // (runLlmRefinement()'s main path resolves ONE model up front and
+    // threads it through packing AND the actual send — see that method's
+    // own doc comment) rather than re-resolving by id string here, which
+    // previously meant packing's own `maxInputTokens`/tokenizer could,
+    // in principle, come from a DIFFERENT resolution than what
+    // ultimately sends and enforces the real admission check.
+    const resolvedModel = mandatoryTokens !== undefined ? model ?? (await findModel(settings.copilotModelId)) : undefined;
+    if (!resolvedModel || mandatoryTokens === undefined) {
+      // No live token count available this time (either the mandatory-
+      // prompt measurement failed, or the model itself can't be resolved)
+      // — fall back to formatRagPromptSection()'s own fence-safe
+      // character-based packing, still benefiting from per-operation
+      // retrieval's wider candidate coverage even without a real
+      // token-budget guarantee. Stale candidates are excluded here too,
+      // same as the token-budget path below.
+      const eligibleCandidates = candidates.filter((c) => !staleFilePaths.has(c.match.filePath));
+      const { section, includedMatches } = formatRagPromptSection(
+        eligibleCandidates.map((c) => c.match),
+        settings.language
+      );
+      this.logRagPackingResult(plan, candidates, includedMatches, undefined);
+      return { section, matches: includedMatches };
+    }
+
+    const packed = await packOperationCandidates(candidates, plan.operations, settings.language, {
+      maxInputTokens: resolvedModel.maxInputTokens,
+      safetyMargin: PROMPT_TOKEN_SAFETY_MARGIN,
+      mandatoryTokens,
+      staleFilePaths,
+      countTokens: async (text) => {
+        try {
+          return await resolvedModel.countTokens(text);
+        } catch {
+          return undefined;
+        }
+      }
+    });
+    this.logRagPackingResult(plan, candidates, packed.includedMatches, packed.diagnostics);
+    const { section, includedMatches } = packed;
+    return { section, matches: includedMatches };
+  }
+
+  /** The set of `RagMatch.filePath` values currently `stale` or `missing`
+   * per Phase 5's active freshness check — see `buildRagSection()`'s own
+   * doc comment on why this is fetched (cached, never forced) on every
+   * request rather than only via the explicit manual command. Failures
+   * (workspace not resolvable, freshness check itself erroring) degrade to
+   * "nothing known stale" — never blocks code generation on a diagnostic
+   * feature failing. */
+  private async getStaleRagFilePaths(workspaceRoot: vscode.Uri): Promise<Set<string>> {
+    try {
+      const report = await getOrBuildFreshnessReport(workspaceRoot, {
+        onWarn: (message) => this.outputChannel.appendLine(`RAG Source Freshness: ${message}`)
+      });
+      return new Set(report.entries.filter((e) => e.state === 'stale' || e.state === 'missing').map((e) => e.filePath));
+    } catch (err) {
+      this.outputChannel.appendLine(`RAG Source Freshness: could not check freshness for this request (${err instanceof Error ? err.message : String(err)}) — proceeding without excluding any recipe.`);
+      return new Set();
+    }
+  }
+
+  /**
+   * "SoftPlay: Check RAG Source Freshness" (Command Palette command
+   * `objectSpy.checkRagFreshness`, and the Settings panel's own "Check
+   * Freshness" button — see settingsPanel.ts) — Phase 5's active
+   * source-staleness check. Always forces a fresh check
+   * (`forceRefresh: true`): this is an explicit, manually-triggered
+   * diagnostic, not a background poll, so a user clicking it always wants
+   * to know the CURRENT state, not whatever was cached from a previous
+   * run. All real decision logic lives in, and is unit tested from,
+   * rag/ragFreshnessChecker.ts and rag/ragSourceIdentity.ts — this method
+   * is purely the vscode-side "run it and report the result" glue.
+   */
+  async checkRagSourceFreshness(): Promise<FreshnessReport | undefined> {
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri;
+    if (!workspaceRoot) {
+      void vscode.window.showWarningMessage('SoftPlay: Open a workspace folder first — recipes are read from its .github/rag folder.');
+      return undefined;
+    }
+
+    const report = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: 'SoftPlay: Checking RAG source freshness…' },
+      () =>
+        getOrBuildFreshnessReport(workspaceRoot, {
+          forceRefresh: true,
+          onWarn: (message) => this.outputChannel.appendLine(`RAG Source Freshness: ${message}`)
+        })
+    );
+
+    this.logFreshnessReport(report);
+
+    const { fresh, stale, missing, unverifiable, error } = report.counts;
+    if (report.entries.length === 0) {
+      void vscode.window.showInformationMessage('SoftPlay: No RAG recipes found under .github/rag — nothing to check.');
+    } else {
+      const summary = `RAG Source Freshness: ${fresh} fresh, ${stale} stale, ${missing} missing, ${unverifiable} unverifiable, ${error} error(s) — see the SoftPlay output channel for details.`;
+      if (stale > 0 || missing > 0 || error > 0) {
+        const choice = await vscode.window.showWarningMessage(summary, 'Show Output');
+        if (choice === 'Show Output') {
+          this.outputChannel.show(true);
+        }
+      } else {
+        void vscode.window.showInformationMessage(summary);
+      }
+    }
+    return report;
+  }
+
+  private logFreshnessReport(report: FreshnessReport): void {
+    this.outputChannel.appendLine(`\n── RAG Source Freshness check (${report.generatedAt}) ──`);
+    if (report.entries.length === 0) {
+      this.outputChannel.appendLine('No RAG recipes found under .github/rag.');
+      return;
+    }
+    for (const entry of report.entries) {
+      this.outputChannel.appendLine(`[${entry.state.toUpperCase()}] ${entry.relativePath} (${entry.recipeId}) — ${entry.detail}`);
+    }
+    const { fresh, stale, missing, unverifiable, error } = report.counts;
+    this.outputChannel.appendLine(
+      `Summary: ${report.entries.length} recipe(s) — ${fresh} fresh, ${stale} stale, ${missing} missing, ${unverifiable} unverifiable, ${error} error(s).`
+    );
   }
 
   private async readInstructionFiles(relPaths: string[]): Promise<{ path: string; content: string }[]> {
@@ -2603,34 +3067,20 @@ function buildEmptyResponseGuidance(rawMessage: string, customInstructionFileCou
   );
 }
 
-/**
- * Deterministic RAG traceability — prepended to the FINAL generated code
- * ourselves, never left to the model's own compliance with the
- * "add a comment" instruction in formatRagPromptSection() (see that
- * instruction's own doc comment — this banner is the guarantee; the
- * inline comment the model is asked to add near each actual call site is
- * a best-effort improvement on TOP of this, not a substitute for it).
- * Lists every recipe that was actually retrieved and injected into the
- * prompt for this exact generation, each traced back to its real
- * `.github/rag/` file — so "was RAG actually used, and where did it come
- * from" is answerable by reading the top of the generated file, not by
- * trusting the model remembered to say so. A no-op (returns `code`
- * unchanged) when no RAG components were matched — a request RAG had
- * nothing to offer for costs nothing extra here either.
- */
-function prependRagTraceabilityBanner(code: string, matches: RagMatch[], language: 'java' | 'python'): string {
-  if (matches.length === 0) {
-    return code;
+/** Picks the right user-facing message for a failed Copilot request.
+ * `PromptTooLargeError` (llm/copilotClient.ts) already names the exact
+ * token count/budget and concrete levers — passed through as-is rather
+ * than wrapped in `buildEmptyResponseGuidance()`'s "empty response (no
+ * choices)" wording, which would misdescribe a request this extension
+ * itself declined to send. An "empty response" style error still gets
+ * that guidance; anything else is shown as-is. */
+function describeCopilotFailure(err: unknown, message: string, customInstructionFileCount: number, ragSection: string): string {
+  if (err instanceof PromptTooLargeError) {
+    return message;
   }
-  const c = language === 'python' ? '#' : '//';
-  const banner = [
-    `${c} ── RAG-matched reusable component(s) referenced in this generation ──`,
-    ...matches.map((m) => `${c} - "${m.title}" (id: ${m.id}) — from ${vscode.workspace.asRelativePath(m.filePath)}`),
-    `${c} ────────────────────────────────────────────────────────────────────`,
-    ''
-  ].join('\n');
-  return banner + code;
+  return isEmptyModelResponseError(message) ? buildEmptyResponseGuidance(message, customInstructionFileCount, !!ragSection) : message;
 }
+
 
 /** Bounds how much of a raw compiler/test-runner error goes into a modal
  * confirmation dialog's `detail` text — a full multi-KB stack trace reads

@@ -1,0 +1,33 @@
+[
+  {
+    "name": "budgeted input",
+    "system": "mandatory",
+    "context": "selected input",
+    "request": ""
+  },
+  {
+    "name": "actual chain input",
+    "input": {
+      "systemInstructions": "mandatory\n\nGenerate a single, well-structured Cucumber Gherkin .feature file (Feature/Scenario/Given-When-Then) covering the ask below. Output ONLY the .feature file content, no commentary, no fenced code block wrapper.",
+      "ingestedContext": "selected input",
+      "userRequest": "(No additional instructions were provided — use the ingested files and any custom instructions/RAG context above.)"
+    }
+  },
+  {
+    "name": "Result after Clear Data",
+    "content": "Feature: old request result"
+  },
+  {
+    "name": "Files after Clear Data during parsing",
+    "files": [
+      {
+        "id": "old",
+        "fileName": "old.txt",
+        "kind": "text",
+        "sizeBytes": 5,
+        "rawText": "hello",
+        "config": {}
+      }
+    ]
+  }
+]

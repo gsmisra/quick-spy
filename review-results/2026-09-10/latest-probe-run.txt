@@ -1,0 +1,223 @@
+[
+  {
+    "name": "Overload target resolution",
+    "observed": [
+      {
+        "targetRelPath": "helper-find-java.md",
+        "status": "unique"
+      },
+      {
+        "targetRelPath": "helper-find-java.md",
+        "status": "conflict",
+        "matchesIndex": 0
+      }
+    ]
+  },
+  {
+    "name": "21 public methods",
+    "observed": {
+      "extracted": 20
+    }
+  },
+  {
+    "name": "Async/multiline Python skipped alongside supported method",
+    "observed": [
+      "sync_call"
+    ]
+  },
+  {
+    "name": "Java nested class ownership",
+    "observed": [
+      {
+        "name": "run",
+        "owner": "Outer"
+      }
+    ]
+  },
+  {
+    "name": "Commented-out Java extracted",
+    "observed": [
+      "removed",
+      "live"
+    ]
+  },
+  {
+    "name": "Python nested function is not public API",
+    "observed": [
+      "outer",
+      "inner"
+    ]
+  },
+  {
+    "name": "Valid Java import statement rejected",
+    "observed": {
+      "ok": false,
+      "reason": "None of the declared Java import(s) (import acme.Helper;) match the source file's own package (\"acme\")."
+    }
+  },
+  {
+    "name": "Wrong signature and owner accepted",
+    "observed": {
+      "ok": true
+    }
+  },
+  {
+    "name": "Secret scrub corrupts Python type annotations",
+    "observed": {
+      "text": "API: def login(password: <REDACTED> user: str):\n```python\nlogin(password, user)\n```",
+      "scrubbedCount": 1
+    }
+  },
+  {
+    "name": "No callable example accepted with valid YAML",
+    "observed": {
+      "normalization": "accepted",
+      "grounding": {
+        "ok": true
+      }
+    }
+  },
+  {
+    "name": "Distinct source identities retain duplicate model IDs",
+    "observed": [
+      "helper",
+      "helper"
+    ]
+  },
+  {
+    "name": "Filename depends on batch composition",
+    "observed": {
+      "alone": [
+        {
+          "targetRelPath": "helper.md",
+          "status": "unique"
+        }
+      ],
+      "together": [
+        {
+          "targetRelPath": "helper-java.md",
+          "status": "unique"
+        },
+        {
+          "targetRelPath": "helper-py.md",
+          "status": "unique"
+        }
+      ]
+    }
+  },
+  {
+    "name": "Secondary generated filename collision",
+    "observed": [
+      {
+        "targetRelPath": "helper-java.md",
+        "status": "unique"
+      },
+      {
+        "targetRelPath": "helper-py.md",
+        "status": "unique"
+      },
+      {
+        "targetRelPath": "helper-java.md",
+        "status": "unique"
+      }
+    ]
+  },
+  {
+    "name": "Changed supporting field still fresh",
+    "observed": {
+      "state": "fresh",
+      "detail": "Matches the current content of \"/review/Helper.java\".",
+      "sourcePath": "Helper.java#find",
+      "resolvedPath": "/review/Helper.java"
+    }
+  },
+  {
+    "name": "Required contract prose lost while code preserved",
+    "observed": {
+      "included": 1,
+      "hasRequires": false,
+      "hasAPI": false,
+      "hasCall": true
+    }
+  },
+  {
+    "name": "Packing drops fitting smaller candidate (deterministic fake tokenizer)",
+    "observed": {
+      "smallFits": true,
+      "included": []
+    }
+  },
+  {
+    "name": "Duplicate IDs collapse distinct retrieved contracts",
+    "observed": [
+      {
+        "file": "one.md",
+        "operations": [
+          "a",
+          "b"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "Secret handling boundaries",
+    "observed": {
+      "rawSourceSecretSent": true,
+      "rawSecretInDraft": true,
+      "counts": {
+        "succeeded": 0,
+        "skipped": 0,
+        "failed": 1
+      }
+    }
+  },
+  {
+    "name": "Cancellation after response before write",
+    "observed": {
+      "counts": {
+        "succeeded": 1,
+        "skipped": 0,
+        "failed": 0
+      },
+      "written": [
+        "/review/.github/rag/helper-find.md"
+      ]
+    }
+  },
+  {
+    "name": "Actual generator overload path",
+    "observed": {
+      "counts": {
+        "succeeded": 1,
+        "skipped": 0,
+        "failed": 1
+      },
+      "files": [
+        "/review/.github/rag/helper-find-java.md"
+      ],
+      "errors": [
+        "Conflicts with \"Helper.java :: find\" in this same batch — both share the same name and folder but have different content, so which one should win is ambiguous. Rename one of them (or place them in different folders) and try again."
+      ]
+    }
+  },
+  {
+    "name": "Actual generator rejects conventional Java import",
+    "observed": {
+      "counts": {
+        "succeeded": 0,
+        "skipped": 0,
+        "failed": 1
+      },
+      "drafts": [
+        "/review/.github/rag-drafts/helper-find.md"
+      ]
+    }
+  },
+  {
+    "name": "Existing workspace corpus parse",
+    "observed": {
+      "ok": false,
+      "error": "Missing YAML frontmatter — the file must start with a \"---\" line."
+    }
+  }
+]

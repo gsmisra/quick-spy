@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { deflateRawSync } from 'zlib';
-import { unzip } from '../../src/rag/zipReader';
+import { unzip, readZipDirectory, extractZipEntryContent, ZipEntryTooLargeError } from '../../src/rag/zipReader';
 
 /**
  * Minimal, test-only ZIP writer — hand-builds a valid zip byte layout
@@ -132,6 +132,75 @@ test('rejects an unsupported compression method rather than returning garbage', 
   const centralHeaderOffset = zip.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]));
   zip.writeUInt16LE(99, centralHeaderOffset + 10);
   assert.throws(() => unzip(zip), /unsupported zip compression method/i);
+});
+
+test('readZipDirectory reads declared metadata for every entry WITHOUT decompressing any of them', () => {
+  // Highly compressible on purpose — a small, deliberately BOUNDED fixture
+  // (200KB, not a real multi-gigabyte zip bomb) standing in for "an entry
+  // that inflates to far more than its compressed size suggests". Reading
+  // the directory must never touch the actual (de)compression path at all.
+  const bigContent = 'a'.repeat(200_000);
+  const zip = buildZip([{ path: 'huge.txt', content: bigContent }]);
+  const directory = readZipDirectory(zip);
+  assert.equal(directory.length, 1);
+  assert.equal(directory[0].path, 'huge.txt');
+  assert.equal(directory[0].isDirectory, false);
+  assert.equal(directory[0].uncompressedSize, 200_000);
+  assert.ok(directory[0].compressedSize < 1_000, 'expected this highly-compressible fixture to compress to well under 1KB');
+});
+
+test('extractZipEntryContent rejects an entry whose ACTUAL decompressed output exceeds maxOutputBytes, bounded during inflate itself', () => {
+  const bigContent = 'a'.repeat(200_000); // small, bounded fixture — see the test above
+  const zip = buildZip([{ path: 'huge.txt', content: bigContent }]);
+  const [entry] = readZipDirectory(zip);
+  assert.throws(() => extractZipEntryContent(zip, entry, { maxOutputBytes: 10_000 }), ZipEntryTooLargeError);
+});
+
+test('extractZipEntryContent rejects an oversized STORED (uncompressed) entry too, not just deflated ones', () => {
+  const zip = buildZip([{ path: 'huge.txt', content: 'a'.repeat(50_000), store: true }]);
+  const [entry] = readZipDirectory(zip);
+  assert.throws(() => extractZipEntryContent(zip, entry, { maxOutputBytes: 10_000 }), ZipEntryTooLargeError);
+});
+
+test('extractZipEntryContent succeeds and returns exact content when it fits within maxOutputBytes', () => {
+  const content = 'hello world';
+  const zip = buildZip([{ path: 'small.txt', content }]);
+  const [entry] = readZipDirectory(zip);
+  const result = extractZipEntryContent(zip, entry, { maxOutputBytes: 1_000 });
+  assert.equal(result.toString('utf-8'), content);
+});
+
+test('extractZipEntryContent on a directory entry returns empty content without touching maxOutputBytes at all', () => {
+  const zip = buildZip([{ path: 'empty-folder/', content: '', store: true }]);
+  const [entry] = readZipDirectory(zip);
+  const result = extractZipEntryContent(zip, entry, { maxOutputBytes: 0 });
+  assert.equal(result.length, 0);
+});
+
+test('readZipDirectory throws a clear error when an entry\'s local header offset points outside the file', () => {
+  const zip = buildZip([{ path: 'a.txt', content: 'hi', store: true }]);
+  const centralHeaderOffset = zip.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]));
+  zip.writeUInt32LE(zip.length + 1_000, centralHeaderOffset + 42); // local-header-offset field
+  assert.throws(() => readZipDirectory(zip), /local file header offset outside the file/i);
+});
+
+test('extractZipEntryContent throws a clear error when the declared compressed size extends past the end of the file', () => {
+  const zip = buildZip([{ path: 'a.txt', content: 'hi', store: true }]);
+  const centralHeaderOffset = zip.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]));
+  zip.writeUInt32LE(1_000_000, centralHeaderOffset + 20); // compressed-size field
+  const [entry] = readZipDirectory(zip);
+  assert.throws(() => extractZipEntryContent(zip, entry, { maxOutputBytes: 10_000_000 }), /extends past the end of the file/i);
+});
+
+test('unzip() (the no-cap convenience wrapper) still round-trips exactly like before this fix for ordinary archives', () => {
+  const zip = buildZip([
+    { path: 'a.txt', content: 'stored content', store: true },
+    { path: 'b.txt', content: 'deflated content, repeated a bit to compress well. '.repeat(10) }
+  ]);
+  const entries = unzip(zip);
+  const byPath = Object.fromEntries(entries.map((e) => [e.path, e.content.toString('utf-8')]));
+  assert.equal(byPath['a.txt'], 'stored content');
+  assert.equal(byPath['b.txt'], 'deflated content, repeated a bit to compress well. '.repeat(10));
 });
 
 test('extracts multiple entries with a mix of stored and deflated compression', () => {

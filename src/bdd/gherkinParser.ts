@@ -173,24 +173,45 @@ export function parseFeatureFile(content: string): GherkinFeature {
       if (t.startsWith('@')) {
         // Tags directly before "Examples:" belong to that Examples block —
         // but if what follows isn't actually Examples:, they belong to the
-        // NEXT scenario instead; peek ahead.
-        const tagsHere = parseTags(t);
-        let j = i + 1;
-        while (j < lines.length && !lines[j].trim()) {
-          j++;
+        // NEXT scenario instead; peek ahead. Consumes the COMPLETE run of
+        // consecutive tag lines (blank lines/comments tolerated in between)
+        // into a lookahead buffer FIRST, before deciding what they belong
+        // to — a one-line-only lookahead here used to check just the tag
+        // line's immediate next line, so a SECOND tag line on its own line
+        // (`@one` then `@two`, each before "Examples:") made that check see
+        // another tag line instead of "Examples:", fail, and silently drop
+        // the entire Examples block for this scenario — both tags (and the
+        // table they belonged to) were attributed to the NEXT scenario
+        // instead. See the dedicated test for the exact repro.
+        const tagsBlockStart = i;
+        const tagsHere: string[] = [];
+        let j = i;
+        while (j < lines.length) {
+          const lineJ = lines[j].trim();
+          if (lineJ.startsWith('@')) {
+            tagsHere.push(...parseTags(lineJ));
+            j++;
+            continue;
+          }
+          if (!lineJ || lineJ.startsWith('#')) {
+            j++;
+            continue;
+          }
+          break;
         }
         if (j < lines.length && /^Examples:/i.test(lines[j].trim())) {
           exampleTags = tagsHere;
           i = j;
         } else {
           // These tags actually belong to the NEXT scenario, not an
-          // Examples block here — leave `i` untouched (don't consume this
-          // line, and don't record these tags here either) so the OUTER
-          // loop's own tag-handling branch re-parses this exact line fresh
-          // on its next iteration, rather than this loop recording it AND
-          // the outer loop recording it again (which would duplicate the
-          // tag). This scenario's own rawText slice, computed right after
-          // this inner loop ends, correctly stops before this line either way.
+          // Examples block here — rewind `i` to the FIRST tag line in this
+          // run so the OUTER loop's own tag-handling branch re-parses the
+          // whole run fresh on its next iteration, rather than this loop
+          // recording it AND the outer loop recording it again (which
+          // would duplicate the tag). This scenario's own rawText slice,
+          // computed right after this inner loop ends, correctly stops
+          // before this line either way.
+          i = tagsBlockStart;
           break;
         }
       }
@@ -283,6 +304,46 @@ function consumeSteps(lines: string[], start: number, out: GherkinStep[]): numbe
   return i;
 }
 
+export interface FilteredScenarioParts {
+  /** Tags line(s) + the "Scenario:"/"Scenario Outline:" name line. */
+  header: string;
+  /** One entry per SELECTED step, in original scenario order, each already
+   * rendered with its *effective* keyword (see `withEffectiveKeyword()`) —
+   * never includes a deselected step's text under any circumstances (see
+   * `buildFilteredScenarioText()`'s own doc comment on why that guarantee
+   * matters). */
+  stepTexts: string[];
+  /** Raw text of every Examples block belonging to this scenario — current
+   * behavior includes ALL of a Scenario Outline's Examples regardless of
+   * step selection (Examples aren't individually selectable the way steps
+   * are), matching `buildFilteredScenarioText()`'s existing behavior
+   * exactly. */
+  exampleTexts: string[];
+}
+
+/** The structural pieces `buildFilteredScenarioText()` below joins into one
+ * string — exposed separately so a caller that needs PER-STEP granularity
+ * (rag/ragOperationPlanner.ts's shared operation planner — see its own doc
+ * comment) doesn't have to re-implement this same selection/
+ * effective-keyword logic, or fall back to re-parsing the ALREADY-FLATTENED
+ * text `buildFilteredScenarioText()` produces. */
+export function buildFilteredScenarioParts(scenario: GherkinScenario, selectedStepIndices: readonly number[]): FilteredScenarioParts {
+  const selected = new Set(selectedStepIndices);
+  const header: string[] = [];
+  if (scenario.tags.length) {
+    header.push(`@${scenario.tags.join(' @')}`);
+  }
+  header.push(`${scenario.kind}: ${scenario.name}`);
+
+  const stepTexts = scenario.steps
+    .map((step, index) => (selected.has(index) ? withEffectiveKeyword(step) : undefined))
+    .filter((block): block is string => block !== undefined);
+
+  const exampleTexts = scenario.examples.map((ex) => ex.rawText);
+
+  return { header: header.join('\n'), stepTexts, exampleTexts };
+}
+
 /**
  * Reconstructs a scenario down to only the steps the user checked in
  * featureFilePanel.ts's per-step checkboxes — the exact text handed to the
@@ -297,20 +358,8 @@ function consumeSteps(lines: string[], start: number, out: GherkinStep[]): numbe
  * and is no longer present in this reconstruction to give it context.
  */
 export function buildFilteredScenarioText(scenario: GherkinScenario, selectedStepIndices: readonly number[]): string {
-  const selected = new Set(selectedStepIndices);
-  const header: string[] = [];
-  if (scenario.tags.length) {
-    header.push(`@${scenario.tags.join(' @')}`);
-  }
-  header.push(`${scenario.kind}: ${scenario.name}`);
-
-  const stepBlocks = scenario.steps
-    .map((step, index) => (selected.has(index) ? withEffectiveKeyword(step) : undefined))
-    .filter((block): block is string => block !== undefined);
-
-  const exampleBlocks = scenario.examples.map((ex) => ex.rawText);
-
-  return [header.join('\n'), ...stepBlocks, ...exampleBlocks].filter((block) => block.trim().length > 0).join('\n\n');
+  const { header, stepTexts, exampleTexts } = buildFilteredScenarioParts(scenario, selectedStepIndices);
+  return [header, ...stepTexts, ...exampleTexts].filter((block) => block.trim().length > 0).join('\n\n');
 }
 
 /** Swaps a step's rawText's first line to print its resolved
@@ -333,15 +382,64 @@ function consumeTable(lines: string[], start: number): { rows: string[][]; nextI
   const rows: string[][] = [];
   let i = start;
   while (i < lines.length && lines[i].trim().startsWith('|')) {
-    const cells = lines[i]
-      .trim()
-      .split('|')
-      .slice(1, -1)
-      .map((c) => c.trim().replace(/\\\|/g, '|'));
-    rows.push(cells);
+    rows.push(splitTableRow(lines[i]));
     i++;
   }
   return { rows, nextIndex: i };
+}
+
+/** Splits ONE `| a | b |`-shaped row into its cells, honoring Gherkin's own
+ * cell-escaping rules (`\|` -> a literal pipe, `\\` -> a literal backslash,
+ * `\n` -> a newline within a cell) — scanning character by character and
+ * splitting ONLY on an UNESCAPED `|`, rather than splitting on every `|`
+ * first and unescaping each already-split piece afterward (the previous
+ * approach: `line.split('|')` then `.replace(/\\\|/g, '|')` per cell).
+ * That order is backwards — `split('|')` doesn't know a `|` was preceded
+ * by a backslash, so it cuts the row at an ESCAPED pipe too, before the
+ * unescape regex ever gets a chance to run on the (now wrongly-split)
+ * pieces. `| a\|b | c |` — a valid two-cell row, `['a|b', 'c']` — used to
+ * come out as three cells (`'a\\'`, `'b'`, `'c'`) instead. */
+function splitTableRow(rawLine: string): string[] {
+  const line = rawLine.trim();
+  const cells: string[] = [];
+  let current = '';
+  // Skip the row's own leading '|' (if present) — same effective bounds as
+  // the old `split('|').slice(1, -1)`, just escape-aware from here on.
+  let i = line.startsWith('|') ? 1 : 0;
+  for (; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '\\' && i + 1 < line.length) {
+      const next = line[i + 1];
+      if (next === '|' || next === '\\') {
+        current += next;
+        i++;
+        continue;
+      }
+      if (next === 'n') {
+        current += '\n';
+        i++;
+        continue;
+      }
+      // An unrecognized escape (e.g. a lone trailing backslash, or "\x") —
+      // keep the backslash literally rather than silently dropping it.
+      current += ch;
+      continue;
+    }
+    if (ch === '|') {
+      cells.push(current.trim());
+      current = '';
+      continue;
+    }
+    current += ch;
+  }
+  // A well-formed row ends with '|', which already closed the last cell
+  // above and left `current` empty — but tolerate a row missing its
+  // trailing '|' by keeping whatever's left rather than silently dropping
+  // it.
+  if (current.trim().length > 0) {
+    cells.push(current.trim());
+  }
+  return cells;
 }
 
 function parseTags(line: string): string[] {

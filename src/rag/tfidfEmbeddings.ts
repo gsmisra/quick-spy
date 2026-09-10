@@ -39,13 +39,42 @@ export class TfIdfEmbeddings extends Embeddings {
   /** Lowercase word/identifier tokenizer — splits on anything that isn't a
    * letter, digit, or underscore, and drops single-character tokens (too
    * common/low-signal to matter, e.g. stray "a"/"x" left over from code).
-   * Deliberately simple and easy to reason about/test rather than
-   * attempting real camelCase/snake_case splitting — the corpus's own
-   * title/tags (plain English) carry most of the retrieval signal anyway.
-   * This is the RAW split only — see `extractFeatures()` below for the
-   * normalized+bigram feature set actually fed into the TF-IDF vectors. */
+   * Deliberately simple, and this exact whole-identifier token is what
+   * bigrams are built from in `extractFeatures()` below — camelCase/
+   * PascalCase/snake_case sub-word SPLITTING happens there too, as an
+   * ADDITIONAL unigram-only feature (see `splitIdentifierWords()` and
+   * `extractFeatures()`'s own doc comment), never by changing what this
+   * function itself returns — every consecutive-token bigram this
+   * tokenizer's own output feeds into must keep meaning "these two whole
+   * identifiers were adjacent," not get diluted by a sub-word standing in
+   * for one of them. */
   static tokenize(text: string): string[] {
     return (text.toLowerCase().match(/[a-z0-9_]+/g) ?? []).filter((token) => token.length > 1);
+  }
+
+  /** Splits ONE already-extracted alphanumeric/underscore run into its
+   * component words: `_` boundaries first, then camelCase/PascalCase
+   * boundaries within each resulting segment (a lowercase-or-digit
+   * immediately followed by an uppercase letter starts a new word, e.g.
+   * "queryOne" -> "query"/"One"; a run of uppercase letters immediately
+   * followed by an uppercase-then-lowercase pair also splits before that
+   * pair, e.g. "XMLHttpRequest" -> "XML"/"Http"/"Request", so an acronym
+   * prefix doesn't get glued onto the word after it). Returns the ORIGINAL
+   * segment unchanged when there's nothing to split (a single already-
+   * lowercase or already-uppercase word, a pure number, ...) — used only
+   * by `extractFeatures()` below, to add sub-word signal on TOP of (never
+   * instead of) the exact whole identifier. */
+  private static splitIdentifierWords(raw: string): string[] {
+    return raw
+      .split('_')
+      .filter((segment) => segment.length > 0)
+      .flatMap((segment) =>
+        segment
+          .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+          .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+          .split(/\s+/)
+          .filter((word) => word.length > 0)
+      );
   }
 
   /**
@@ -127,6 +156,34 @@ export class TfIdfEmbeddings extends Embeddings {
     return synonym ?? TfIdfEmbeddings.destem(token);
   }
 
+  /** Sub-word features from camelCase/PascalCase/snake_case splitting
+   * (`splitIdentifierWords()`) — ADDED on top of, never in place of, the
+   * whole-identifier unigrams `tokenize()` already produces, and computed
+   * separately from bigram formation so a compound identifier's split
+   * words never end up glued into a nonsense bigram with the whole
+   * identifier itself (e.g. a hypothetical "queryone_query"). Without
+   * these, a recipe whose only signal for "cassandra" is buried inside the
+   * identifier `CassandraConnectionHelper` in its code example was
+   * literally invisible to a query phrased in plain English ("connect to
+   * cassandra") unless the corpus author ALSO happened to repeat that word
+   * in the title/tags. */
+  private static extractSubwordFeatures(text: string): string[] {
+    const features: string[] = [];
+    for (const raw of text.match(/[A-Za-z0-9_]+/g) ?? []) {
+      const whole = raw.toLowerCase();
+      if (whole.length <= 1) {
+        continue; // matches tokenize()'s own single-char filter
+      }
+      for (const word of TfIdfEmbeddings.splitIdentifierWords(raw)) {
+        const lower = word.toLowerCase();
+        if (lower.length > 1 && lower !== whole) {
+          features.push(TfIdfEmbeddings.canonicalize(lower));
+        }
+      }
+    }
+    return features;
+  }
+
   /** The actual feature set fed into TF-IDF: raw tokens (see `tokenize()`),
    * each normalized via the synonym table + light stemming above, PLUS a
    * bigram for every adjacent pair of normalized tokens (e.g. "database"
@@ -134,17 +191,20 @@ export class TfIdfEmbeddings extends Embeddings {
    * "database_connection") — a recipe and a scenario that share a two-word
    * phrase verbatim now score meaningfully higher than one that only
    * shares its two words scattered separately, without losing single-word
-   * matching for everything else. */
+   * matching for everything else — PLUS every identifier's own split
+   * sub-words (`extractSubwordFeatures()` above), appended last so they
+   * never participate in bigram formation. */
   static extractFeatures(text: string): string[] {
     const unigrams = TfIdfEmbeddings.tokenize(text).map(TfIdfEmbeddings.canonicalize);
+    const subwordFeatures = TfIdfEmbeddings.extractSubwordFeatures(text);
     if (unigrams.length < 2) {
-      return unigrams;
+      return unigrams.concat(subwordFeatures);
     }
     const bigrams: string[] = [];
     for (let i = 0; i < unigrams.length - 1; i++) {
       bigrams.push(`${unigrams[i]}_${unigrams[i + 1]}`);
     }
-    return unigrams.concat(bigrams);
+    return unigrams.concat(bigrams, subwordFeatures);
   }
 
   get vocabularySize(): number {

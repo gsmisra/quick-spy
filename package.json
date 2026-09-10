@@ -2,7 +2,7 @@
   "name": "object-spy-playwright",
   "displayName": "SoftPlay",
   "description": "Drive Playwright's own real codegen tool from a VS Code sidebar, link a Cucumber Gherkin scenario to what it records, and get an AI-refined, enterprise-grade Java or Python test — with proper waits, logging, and BDD step definitions — via GitHub Copilot.",
-  "version": "0.1.75",
+  "version": "0.1.69",
   "publisher": "local-dev",
   "private": true,
   "icon": "media/icon.png",
@@ -67,6 +67,10 @@
         "command": "objectSpy.openSettings",
         "title": "SoftPlay: Open Settings",
         "icon": "$(gear)"
+      },
+      {
+        "command": "objectSpy.checkRagFreshness",
+        "title": "SoftPlay: Check RAG Source Freshness"
       }
     ]
   },
@@ -76,13 +80,23 @@
     "watch": "tsc -watch -p ./",
     "pretest": "tsc -p tsconfig.test.json",
     "test": "node scripts/run-tests.js",
+    "rag:benchmark": "tsc -p tsconfig.test.json && node out-test/src/rag/benchmark/ragBenchmarkRunner.js",
+    "rag:calibrate": "tsc -p tsconfig.test.json && node out-test/src/rag/benchmark/ragCalibrationRunner.js",
+    "rag:evaluate-hybrid": "tsc -p tsconfig.test.json && node out-test/src/rag/benchmark/ragHybridEvaluationRunner.js",
+    "pretest-integration": "npm run compile && tsc -p tsconfig.test-integration.json",
+    "test-integration": "node out-test-integration/test-integration/runTest.js",
     "package": "node node_modules/@vscode/vsce/vsce package"
   },
   "devDependencies": {
+    "@types/glob": "^8.1.0",
     "@types/js-yaml": "^4.0.9",
+    "@types/mocha": "^10.0.10",
     "@types/node": "^20.14.0",
     "@types/vscode": "^1.90.0",
+    "@vscode/test-electron": "^3.1.0",
     "@vscode/vsce": "^2.32.0",
+    "glob": "^13.0.6",
+    "mocha": "^12.0.0",
     "typescript": "^5.5.4"
   },
   "dependencies": {

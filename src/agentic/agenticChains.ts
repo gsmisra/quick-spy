@@ -51,13 +51,31 @@ export interface AgenticGenerationInput {
   userRequest: string;
 }
 
+/** The human turn's own literal wrapper text around `ingestedContext`/
+ * `userRequest` — pulled into its own function (F12 fix) so
+ * agenticModeController.ts's token-budget estimation can build the EXACT
+ * same text this template actually sends, rather than a hand-maintained
+ * approximation that can silently drift out of sync with it (the bug this
+ * fixes: the old estimate concatenated `systemInstructions`+
+ * `ingestedContext`+`userRequest` with plain "\n\n" joins, entirely
+ * omitting this wrapper's own literal text — "Ingested input files
+ * (already trimmed...)...", "---", "The user's request:" — a real,
+ * reproducible undercount of the actual request size). Called BOTH here
+ * (with the template's own `{ingestedContext}`/`{userRequest}` placeholder
+ * strings, so `ChatPromptTemplate` still recognizes them as its own
+ * template variables) and from agenticModeController.ts (with REAL
+ * values, for measurement) — one definition, never two copies to keep in
+ * sync. */
+export function buildAgenticHumanTurnText(ingestedContext: string, userRequest: string): string {
+  return (
+    'Ingested input files (already trimmed to exactly the segments the user selected — treat anything outside ' +
+    `this text as NOT available to you):\n\n${ingestedContext}\n\n---\n\nThe user's request:\n${userRequest}`
+  );
+}
+
 const AGENTIC_PROMPT = ChatPromptTemplate.fromMessages([
   ['system', '{systemInstructions}'],
-  [
-    'human',
-    'Ingested input files (already trimmed to exactly the segments the user selected — treat anything outside ' +
-      'this text as NOT available to you):\n\n{ingestedContext}\n\n---\n\nThe user\'s request:\n{userRequest}'
-  ]
+  ['human', buildAgenticHumanTurnText('{ingestedContext}', '{userRequest}')]
 ]);
 
 /** Builds the one shared chain, bound to a specific model instance. Exposed

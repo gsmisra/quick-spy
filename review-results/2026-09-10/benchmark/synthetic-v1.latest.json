@@ -1,0 +1,552 @@
+{
+  "datasetVersion": "1",
+  "generatedAt": "2026-09-09T16:48:17.741Z",
+  "queryCount": 15,
+  "segments": {
+    "Overall": {
+      "queryCount": 15,
+      "positiveQueryCount": 12,
+      "negativeQueryCount": 3,
+      "recallAtK": {
+        "value": 0.9166666666666666,
+        "count": 12
+      },
+      "precisionAtK": {
+        "value": 0.5416666666666666,
+        "count": 12
+      },
+      "precisionAmongReturned": {
+        "value": 0.5416666666666666,
+        "count": 12
+      },
+      "meanReciprocalRank": {
+        "value": 0.875,
+        "count": 12
+      },
+      "noMatchFalsePositiveRate": {
+        "value": 0.6666666666666666,
+        "count": 3
+      },
+      "positiveAbstentionRate": {
+        "value": 0,
+        "count": 12
+      }
+    },
+    "Java": {
+      "queryCount": 12,
+      "positiveQueryCount": 10,
+      "negativeQueryCount": 2,
+      "recallAtK": {
+        "value": 0.9,
+        "count": 10
+      },
+      "precisionAtK": {
+        "value": 0.55,
+        "count": 10
+      },
+      "precisionAmongReturned": {
+        "value": 0.55,
+        "count": 10
+      },
+      "meanReciprocalRank": {
+        "value": 0.85,
+        "count": 10
+      },
+      "noMatchFalsePositiveRate": {
+        "value": 0.5,
+        "count": 2
+      },
+      "positiveAbstentionRate": {
+        "value": 0,
+        "count": 10
+      }
+    },
+    "Python": {
+      "queryCount": 3,
+      "positiveQueryCount": 2,
+      "negativeQueryCount": 1,
+      "recallAtK": {
+        "value": 1,
+        "count": 2
+      },
+      "precisionAtK": {
+        "value": 0.5,
+        "count": 2
+      },
+      "precisionAmongReturned": {
+        "value": 0.5,
+        "count": 2
+      },
+      "meanReciprocalRank": {
+        "value": 1,
+        "count": 2
+      },
+      "noMatchFalsePositiveRate": {
+        "value": 1,
+        "count": 1
+      },
+      "positiveAbstentionRate": {
+        "value": 0,
+        "count": 2
+      }
+    },
+    "UI mode": {
+      "queryCount": 2,
+      "positiveQueryCount": 1,
+      "negativeQueryCount": 1,
+      "recallAtK": {
+        "value": 0,
+        "count": 1
+      },
+      "precisionAtK": {
+        "value": 0,
+        "count": 1
+      },
+      "precisionAmongReturned": {
+        "value": 0,
+        "count": 1
+      },
+      "meanReciprocalRank": {
+        "value": 0,
+        "count": 1
+      },
+      "noMatchFalsePositiveRate": {
+        "value": 1,
+        "count": 1
+      },
+      "positiveAbstentionRate": {
+        "value": 0,
+        "count": 1
+      }
+    },
+    "API mode": {
+      "queryCount": 13,
+      "positiveQueryCount": 11,
+      "negativeQueryCount": 2,
+      "recallAtK": {
+        "value": 1,
+        "count": 11
+      },
+      "precisionAtK": {
+        "value": 0.5909090909090909,
+        "count": 11
+      },
+      "precisionAmongReturned": {
+        "value": 0.5909090909090909,
+        "count": 11
+      },
+      "meanReciprocalRank": {
+        "value": 0.9545454545454546,
+        "count": 11
+      },
+      "noMatchFalsePositiveRate": {
+        "value": 0.5,
+        "count": 2
+      },
+      "positiveAbstentionRate": {
+        "value": 0,
+        "count": 11
+      }
+    },
+    "Development split": {
+      "queryCount": 10,
+      "positiveQueryCount": 8,
+      "negativeQueryCount": 2,
+      "recallAtK": {
+        "value": 0.875,
+        "count": 8
+      },
+      "precisionAtK": {
+        "value": 0.5,
+        "count": 8
+      },
+      "precisionAmongReturned": {
+        "value": 0.5,
+        "count": 8
+      },
+      "meanReciprocalRank": {
+        "value": 0.8125,
+        "count": 8
+      },
+      "noMatchFalsePositiveRate": {
+        "value": 0.5,
+        "count": 2
+      },
+      "positiveAbstentionRate": {
+        "value": 0,
+        "count": 8
+      }
+    },
+    "Holdout split": {
+      "queryCount": 5,
+      "positiveQueryCount": 4,
+      "negativeQueryCount": 1,
+      "recallAtK": {
+        "value": 1,
+        "count": 4
+      },
+      "precisionAtK": {
+        "value": 0.625,
+        "count": 4
+      },
+      "precisionAmongReturned": {
+        "value": 0.625,
+        "count": 4
+      },
+      "meanReciprocalRank": {
+        "value": 1,
+        "count": 4
+      },
+      "noMatchFalsePositiveRate": {
+        "value": 1,
+        "count": 1
+      },
+      "positiveAbstentionRate": {
+        "value": 0,
+        "count": 4
+      }
+    },
+    "Synthetic origin": {
+      "queryCount": 15,
+      "positiveQueryCount": 12,
+      "negativeQueryCount": 3,
+      "recallAtK": {
+        "value": 0.9166666666666666,
+        "count": 12
+      },
+      "precisionAtK": {
+        "value": 0.5416666666666666,
+        "count": 12
+      },
+      "precisionAmongReturned": {
+        "value": 0.5416666666666666,
+        "count": 12
+      },
+      "meanReciprocalRank": {
+        "value": 0.875,
+        "count": 12
+      },
+      "noMatchFalsePositiveRate": {
+        "value": 0.6666666666666666,
+        "count": 3
+      },
+      "positiveAbstentionRate": {
+        "value": 0,
+        "count": 12
+      }
+    }
+  },
+  "perQuery": [
+    {
+      "queryId": "dev-positive-exact",
+      "isPositive": true,
+      "recallAtK": 1,
+      "precision": {
+        "precisionAtK": 0.5,
+        "precisionAmongReturned": 0.5,
+        "returnedCount": 2
+      },
+      "reciprocalRank": 1,
+      "isFalsePositive": null,
+      "isAbstention": false,
+      "returnedIds": [
+        "postgres-query-one",
+        "mysql-query-helper"
+      ],
+      "language": "java",
+      "automationMode": "api",
+      "split": "development",
+      "origin": "synthetic"
+    },
+    {
+      "queryId": "dev-paraphrase",
+      "isPositive": true,
+      "recallAtK": 1,
+      "precision": {
+        "precisionAtK": 0.5,
+        "precisionAmongReturned": 0.5,
+        "returnedCount": 2
+      },
+      "reciprocalRank": 0.5,
+      "isFalsePositive": null,
+      "isAbstention": false,
+      "returnedIds": [
+        "cassandra-connection-helper",
+        "postgres-query-one"
+      ],
+      "language": "java",
+      "automationMode": "api",
+      "split": "development",
+      "origin": "synthetic"
+    },
+    {
+      "queryId": "dev-identifier-reference",
+      "isPositive": true,
+      "recallAtK": 1,
+      "precision": {
+        "precisionAtK": 0.5,
+        "precisionAmongReturned": 0.5,
+        "returnedCount": 2
+      },
+      "reciprocalRank": 1,
+      "isFalsePositive": null,
+      "isAbstention": false,
+      "returnedIds": [
+        "postgres-query-one",
+        "mysql-query-helper"
+      ],
+      "language": "java",
+      "automationMode": "api",
+      "split": "development",
+      "origin": "synthetic"
+    },
+    {
+      "queryId": "dev-language-incompatibility",
+      "isPositive": true,
+      "recallAtK": 1,
+      "precision": {
+        "precisionAtK": 0.5,
+        "precisionAmongReturned": 0.5,
+        "returnedCount": 2
+      },
+      "reciprocalRank": 1,
+      "isFalsePositive": null,
+      "isAbstention": false,
+      "returnedIds": [
+        "postgres-query-one-py",
+        "screenshot-helper"
+      ],
+      "language": "python",
+      "automationMode": "api",
+      "split": "development",
+      "origin": "synthetic"
+    },
+    {
+      "queryId": "dev-vendor-mismatch",
+      "isPositive": true,
+      "recallAtK": 1,
+      "precision": {
+        "precisionAtK": 0.5,
+        "precisionAmongReturned": 0.5,
+        "returnedCount": 2
+      },
+      "reciprocalRank": 1,
+      "isFalsePositive": null,
+      "isAbstention": false,
+      "returnedIds": [
+        "mysql-query-helper",
+        "cassandra-connection-helper"
+      ],
+      "language": "java",
+      "automationMode": "api",
+      "split": "development",
+      "origin": "synthetic"
+    },
+    {
+      "queryId": "dev-misleading-shared-vocab-cassandra",
+      "isPositive": true,
+      "recallAtK": 0,
+      "precision": {
+        "precisionAtK": 0,
+        "precisionAmongReturned": 0,
+        "returnedCount": 2
+      },
+      "reciprocalRank": 0,
+      "isFalsePositive": null,
+      "isAbstention": false,
+      "returnedIds": [
+        "postgres-query-one",
+        "mysql-query-helper"
+      ],
+      "language": "java",
+      "automationMode": "ui",
+      "split": "development",
+      "origin": "synthetic"
+    },
+    {
+      "queryId": "dev-multiple-required-operations",
+      "isPositive": true,
+      "recallAtK": 1,
+      "precision": {
+        "precisionAtK": 1,
+        "precisionAmongReturned": 1,
+        "returnedCount": 2
+      },
+      "reciprocalRank": 1,
+      "isFalsePositive": null,
+      "isAbstention": false,
+      "returnedIds": [
+        "kafka-producer-helper",
+        "postgres-query-one"
+      ],
+      "language": "java",
+      "automationMode": "api",
+      "split": "development",
+      "origin": "synthetic"
+    },
+    {
+      "queryId": "dev-repeated-operation",
+      "isPositive": true,
+      "recallAtK": 1,
+      "precision": {
+        "precisionAtK": 0.5,
+        "precisionAmongReturned": 0.5,
+        "returnedCount": 2
+      },
+      "reciprocalRank": 1,
+      "isFalsePositive": null,
+      "isAbstention": false,
+      "returnedIds": [
+        "postgres-query-one",
+        "mysql-query-helper"
+      ],
+      "language": "java",
+      "automationMode": "api",
+      "split": "development",
+      "origin": "synthetic"
+    },
+    {
+      "queryId": "dev-empty-query",
+      "isPositive": false,
+      "recallAtK": null,
+      "precision": {
+        "precisionAtK": 0,
+        "precisionAmongReturned": null,
+        "returnedCount": 0
+      },
+      "reciprocalRank": 0,
+      "isFalsePositive": false,
+      "isAbstention": null,
+      "returnedIds": [],
+      "language": "java",
+      "automationMode": "api",
+      "split": "development",
+      "origin": "synthetic"
+    },
+    {
+      "queryId": "dev-no-match",
+      "isPositive": false,
+      "recallAtK": null,
+      "precision": {
+        "precisionAtK": 0,
+        "precisionAmongReturned": 0,
+        "returnedCount": 1
+      },
+      "reciprocalRank": 0,
+      "isFalsePositive": true,
+      "isAbstention": null,
+      "returnedIds": [
+        "kafka-producer-helper"
+      ],
+      "language": "java",
+      "automationMode": "api",
+      "split": "development",
+      "origin": "synthetic"
+    },
+    {
+      "queryId": "holdout-positive-cassandra",
+      "isPositive": true,
+      "recallAtK": 1,
+      "precision": {
+        "precisionAtK": 0.5,
+        "precisionAmongReturned": 0.5,
+        "returnedCount": 2
+      },
+      "reciprocalRank": 1,
+      "isFalsePositive": null,
+      "isAbstention": false,
+      "returnedIds": [
+        "cassandra-connection-helper",
+        "postgres-query-one"
+      ],
+      "language": "java",
+      "automationMode": "api",
+      "split": "holdout",
+      "origin": "synthetic"
+    },
+    {
+      "queryId": "holdout-api-auth",
+      "isPositive": true,
+      "recallAtK": 1,
+      "precision": {
+        "precisionAtK": 0.5,
+        "precisionAmongReturned": 0.5,
+        "returnedCount": 2
+      },
+      "reciprocalRank": 1,
+      "isFalsePositive": null,
+      "isAbstention": false,
+      "returnedIds": [
+        "api-auth-token-helper",
+        "api-request-assertion-helper"
+      ],
+      "language": "java",
+      "automationMode": "api",
+      "split": "holdout",
+      "origin": "synthetic"
+    },
+    {
+      "queryId": "holdout-alternative-helpers",
+      "isPositive": true,
+      "recallAtK": 1,
+      "precision": {
+        "precisionAtK": 1,
+        "precisionAmongReturned": 1,
+        "returnedCount": 2
+      },
+      "reciprocalRank": 1,
+      "isFalsePositive": null,
+      "isAbstention": false,
+      "returnedIds": [
+        "api-response-validator-helper",
+        "api-request-assertion-helper"
+      ],
+      "language": "java",
+      "automationMode": "api",
+      "split": "holdout",
+      "origin": "synthetic"
+    },
+    {
+      "queryId": "holdout-language-incompatibility-python",
+      "isPositive": true,
+      "recallAtK": 1,
+      "precision": {
+        "precisionAtK": 0.5,
+        "precisionAmongReturned": 0.5,
+        "returnedCount": 2
+      },
+      "reciprocalRank": 1,
+      "isFalsePositive": null,
+      "isAbstention": false,
+      "returnedIds": [
+        "postgres-query-one-py",
+        "screenshot-helper"
+      ],
+      "language": "python",
+      "automationMode": "api",
+      "split": "holdout",
+      "origin": "synthetic"
+    },
+    {
+      "queryId": "holdout-no-match-ui",
+      "isPositive": false,
+      "recallAtK": null,
+      "precision": {
+        "precisionAtK": 0,
+        "precisionAmongReturned": 0,
+        "returnedCount": 2
+      },
+      "reciprocalRank": 0,
+      "isFalsePositive": true,
+      "isAbstention": null,
+      "returnedIds": [
+        "screenshot-helper",
+        "postgres-query-one-py"
+      ],
+      "language": "python",
+      "automationMode": "ui",
+      "split": "holdout",
+      "origin": "synthetic"
+    }
+  ]
+}

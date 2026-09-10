@@ -83,6 +83,63 @@ test('extractFeatures leaves a short, already-meaningful word alone rather than 
   assert.deepEqual(TfIdfEmbeddings.extractFeatures('api'), ['api']);
 });
 
+test('extractFeatures splits a camelCase identifier into sub-words WITHOUT dropping the exact identifier itself', () => {
+  const features = TfIdfEmbeddings.extractFeatures('queryOne');
+  assert.ok(features.includes('queryone'), 'the exact identifier must still be present');
+  assert.ok(features.includes('query'), 'the split sub-word "query" must be present');
+  assert.ok(features.includes('one'), 'the split sub-word "one" must be present');
+});
+
+test('extractFeatures splits a PascalCase identifier into sub-words', () => {
+  const features = TfIdfEmbeddings.extractFeatures('CassandraHelper');
+  assert.ok(features.includes('cassandrahelper'));
+  assert.ok(features.includes('cassandra'));
+  assert.ok(features.includes('helper'));
+});
+
+test('extractFeatures splits a snake_case identifier into sub-words', () => {
+  const features = TfIdfEmbeddings.extractFeatures('get_user_by_id');
+  assert.ok(features.includes('get_user_by_id'));
+  assert.ok(features.includes('get'));
+  assert.ok(features.includes('user'));
+  assert.ok(features.includes('by'));
+  assert.ok(features.includes('id'));
+});
+
+test('extractFeatures splits an acronym-prefixed PascalCase identifier without gluing the acronym onto the next word', () => {
+  const features = TfIdfEmbeddings.extractFeatures('XMLHttpRequest');
+  assert.ok(features.includes('xml'));
+  assert.ok(features.includes('http'));
+  assert.ok(features.includes('request'));
+});
+
+test('extractFeatures does NOT add duplicate/extra sub-word features for a simple plain-English word', () => {
+  // No case transitions or underscores to split on — the fix must not
+  // introduce noise for ordinary text, only for real compound identifiers.
+  const features = TfIdfEmbeddings.extractFeatures('database');
+  assert.deepEqual(features, ['database']);
+});
+
+test('split sub-words never pollute bigram formation — no nonsense bigram between a whole identifier and its own sub-word', () => {
+  const features = TfIdfEmbeddings.extractFeatures('queryOne result');
+  assert.ok(!features.some((f) => f.includes('queryone_query') || f.includes('query_queryone')));
+});
+
+test('a query using a plain-English phrase now matches a recipe whose only signal is inside a camelCase identifier', async () => {
+  const embeddings = new TfIdfEmbeddings();
+  const docs = [
+    'reusable helper\nCassandraConnectionHelper\n```java\nvar row = CassandraConnectionHelper.queryOne(session, cql, id);\n```',
+    'take a screenshot of the current page and save it to disk'
+  ];
+  embeddings.fit(docs);
+  const vectors = await embeddings.embedDocuments(docs);
+  const query = await embeddings.embedQuery('connect to cassandra and run a query');
+
+  const dot = (a: number[], b: number[]) => a.reduce((sum, v, i) => sum + v * b[i], 0);
+  const scores = vectors.map((v) => dot(v, query));
+  assert.ok(scores[0] > scores[1], 'the identifier-only cassandra signal should still surface this doc over the unrelated one');
+});
+
 test('a scenario using an abbreviation still matches a recipe tagged with the full word', async () => {
   const embeddings = new TfIdfEmbeddings();
   const docs = ['connect to the database and run a query', 'take a screenshot of the current page'];

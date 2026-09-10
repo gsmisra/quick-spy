@@ -29,11 +29,30 @@ export interface ObjectSpySettings {
   copilotModelId: string;
   /** "Reusable Components (RAG)" — when true, code-generation prompts are
    * augmented with the best-matching entries from `.github/rag/*.md` (see
-   * rag/ragRetriever.ts). Safe to leave on with an empty/missing
-   * `.github/rag` folder — retrieval then simply finds nothing and adds
-   * zero prompt content, so this defaults to true rather than requiring an
-   * extra step once a team actually populates the folder. */
+   * rag/ragRetriever.ts). Off by default — this is an opt-in feature a
+   * team turns on once it has actually populated `.github/rag/`, rather
+   * than a silent default every user must first discover and understand. */
   ragEnabled: boolean;
+  /** "Hybrid Retrieval (Experimental)" — off by default, and INERT even
+   * when true unless `ragSemanticEndpoint`/`ragSemanticModel` are ALSO both
+   * non-empty (see rag/ragHybridConfig.ts's `resolveHybridRetrieveMatches()`)
+   * — "semantic mode must be explicitly configured" means every one of
+   * these, not just this toggle. When genuinely active, `.github/rag/`
+   * recipe text and generation queries are sent to `ragSemanticEndpoint`
+   * for embedding (see rag/ragHttpEmbeddingProvider.ts) and combined with
+   * ordinary lexical (TF-IDF) retrieval via Reciprocal Rank Fusion (see
+   * rag/ragHybridRetriever.ts) — lexical-only retrieval keeps working
+   * completely unaffected when this is off. */
+  ragHybridEnabled: boolean;
+  /** Full URL of a user-run OpenAI-compatible embeddings endpoint (e.g.
+   * "https://api.openai.com/v1/embeddings", an Azure OpenAI deployment
+   * URL, or a self-hosted server). Empty string means "not configured" —
+   * see `ragHybridEnabled`'s own doc comment. */
+  ragSemanticEndpoint: string;
+  /** Sent as the embeddings request's own `model` field — provider-defined
+   * meaning (e.g. "text-embedding-3-small"). Empty string means "not
+   * configured." */
+  ragSemanticModel: string;
   /** "Total Agentic Mode" — when true, the Control Panel sidebar swaps its
    * normal Playwright-recording UI for the file-drop/ingestion-driven
    * agentic workflow (see agentic/agenticModeController.ts): drop
@@ -67,11 +86,30 @@ const DEFAULTS: ObjectSpySettings = {
   automationMode: 'ui',
   copilotEnabled: false,
   copilotModelId: '',
-  ragEnabled: true,
+  ragEnabled: false,
+  ragHybridEnabled: false,
+  ragSemanticEndpoint: '',
+  ragSemanticModel: '',
   agenticModeEnabled: false
 };
 
 const STORAGE_KEY = 'objectSpy.settings';
+
+/** One-time migration marker (its OWN separate globalState key, never part
+ * of the settings object itself) for the day `DEFAULTS.ragEnabled` flipped
+ * from `true` to `false` — changing that default only ever affects a
+ * BRAND-NEW install with no `STORAGE_KEY` entry yet; an existing
+ * installation already has `ragEnabled: true` sitting in `stored` (either
+ * from an explicit choice, or simply because it inherited the OLD default
+ * the very first time settings were ever saved), and `stored` always wins
+ * over `DEFAULTS` in the merge below — so the new default alone would
+ * never actually turn it off for anyone who had already used this
+ * extension. This forces `ragEnabled` to `false` exactly ONCE, the first
+ * time settings load after this migration shipped, regardless of whatever
+ * was previously stored — and never again after that, so a user who
+ * deliberately re-enables it afterward has that choice persisted and
+ * respected normally going forward, exactly like any other setting. */
+const RAG_ENABLED_DEFAULT_MIGRATION_KEY = 'objectSpy.ragEnabledDefaultMigrated.v1';
 
 /**
  * Owns SoftPlay's persistent settings (language, language version, browser
@@ -88,6 +126,15 @@ export class SettingsStore implements vscode.Disposable {
 
   constructor(private readonly context: vscode.ExtensionContext) {
     const stored = context.globalState.get<Partial<ObjectSpySettings>>(STORAGE_KEY);
+    let merged: ObjectSpySettings = { ...DEFAULTS, ...stored };
+    // See RAG_ENABLED_DEFAULT_MIGRATION_KEY's own doc comment — forces
+    // ragEnabled off exactly once for an existing installation whose
+    // ALREADY-persisted settings still carry the old `true` default,
+    // then never touches it again.
+    if (!context.globalState.get<boolean>(RAG_ENABLED_DEFAULT_MIGRATION_KEY)) {
+      merged = { ...merged, ragEnabled: false };
+      void context.globalState.update(RAG_ENABLED_DEFAULT_MIGRATION_KEY, true);
+    }
     // automationMode is deliberately NOT restored from a previous session —
     // "UI Automation should be always selected by default" means every
     // fresh VS Code/extension-host start, not just a brand-new install.
@@ -97,7 +144,7 @@ export class SettingsStore implements vscode.Disposable {
     // and reopened), it just never survives a restart. Every other setting
     // (language, browser, Copilot linking) keeps its usual persisted
     // behavior, unaffected.
-    this.current = { ...sanitize({ ...DEFAULTS, ...stored }), automationMode: DEFAULTS.automationMode };
+    this.current = { ...sanitize(merged), automationMode: DEFAULTS.automationMode };
   }
 
   get(): ObjectSpySettings {

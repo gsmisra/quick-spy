@@ -75,6 +75,13 @@ test('rejects an unrecognized automationMode/language value', () => {
   assert.equal(result.ok, false);
 });
 
+test('rejects otherwise-valid frontmatter with an EMPTY body', () => {
+  const result = parseRagFile('---\nid: x\ntitle: X\nautomationMode: [ui]\nlanguage: [java]\n---\n\n   \n');
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.match(result.error, /Body is empty/);
+});
+
 test('defaults tags to an empty array when omitted', () => {
   const result = parseRagFile('---\nid: x\ntitle: X\nautomationMode: [ui]\nlanguage: [java]\n---\nBody\n');
   assert.equal(result.ok, true);

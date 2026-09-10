@@ -1,0 +1,28 @@
+{
+  "datasetVersion": "1",
+  "_comment": "See benchmarks/rag/HUMAN_LABELING_GUIDE.md. Replace the ONE placeholder recipe/query below with your real corpus and real labeled requests — they exist only so this file is schema-valid (recipes/queries each require at least one entry) out of the box; delete or replace them, don't leave them in a real dataset.",
+  "recipes": [
+    {
+      "id": "REPLACE-ME-with-a-real-recipe-id",
+      "title": "REPLACE ME — copy this recipe's real title from its .github/rag/*.md frontmatter",
+      "tags": ["replace-me"],
+      "automationMode": ["ui"],
+      "language": ["java"],
+      "relativePath": "REPLACE/ME/with-the-real-relative-path.md",
+      "body": "REPLACE ME with the real recipe body (everything after the frontmatter's closing ---)."
+    }
+  ],
+  "queries": [
+    {
+      "queryId": "REPLACE-ME-with-a-stable-query-id",
+      "language": "java",
+      "automationMode": "ui",
+      "split": "development",
+      "origin": "human-labeled",
+      "datasetVersion": "1",
+      "queryText": "REPLACE ME with the real request text (Gherkin scenario / chat-box instructions), scrubbed of anything sensitive.",
+      "relevantIds": ["REPLACE-ME-with-a-real-recipe-id"],
+      "rationale": "REPLACE ME — one sentence explaining why this recipe (or an empty relevantIds list, for a deliberate no-match case) is the correct label."
+    }
+  ]
+}

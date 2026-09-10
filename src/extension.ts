@@ -31,6 +31,10 @@ export function activate(context: vscode.ExtensionContext): void {
       panelManager.openSettings();
     }),
 
+    vscode.commands.registerCommand('objectSpy.checkRagFreshness', async () => {
+      await panelManager.checkRagSourceFreshness();
+    }),
+
     // Ensures CodegenManager (and any launched codegen process handle) is
     // cleaned up when the extension host shuts down.
     { dispose: () => panelManager.dispose() },

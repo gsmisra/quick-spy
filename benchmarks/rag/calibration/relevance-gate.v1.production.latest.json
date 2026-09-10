@@ -1,0 +1,331 @@
+{
+  "datasetVersion": "1",
+  "generatedAt": "2026-09-10T02:07:27.167Z",
+  "provisional": true,
+  "corpusFingerprint": "36ee7bc90d743ead457eb145097d0c29e99a5cc53bfe5c29254adc4df8ab5c5d",
+  "meta": {
+    "perOperationK": 3,
+    "estimatedMaxInputTokens": 128000,
+    "estimatedMandatoryTokens": 2000,
+    "gitProvenance": {
+      "commit": "f7d0e0565852c7b2db79e2c6d7ee281da879c9c6",
+      "dirty": true
+    }
+  },
+  "productionDefault": {
+    "minLexicalScore": 0,
+    "requireSymbolEvidence": false,
+    "requireModeCompatibility": false
+  },
+  "grid": [
+    {
+      "label": "default (any positive score)",
+      "config": {
+        "minLexicalScore": 0,
+        "requireSymbolEvidence": false,
+        "requireModeCompatibility": false
+      },
+      "metrics": {
+        "queryCount": 10,
+        "positiveQueryCount": 8,
+        "negativeQueryCount": 2,
+        "recallAtK": {
+          "value": 1,
+          "count": 8
+        },
+        "precisionAtK": {
+          "value": 0.375,
+          "count": 8
+        },
+        "precisionAmongReturned": {
+          "value": 0.375,
+          "count": 8
+        },
+        "meanReciprocalRank": {
+          "value": 0.8541666666666666,
+          "count": 8
+        },
+        "noMatchFalsePositiveRate": {
+          "value": 0.5,
+          "count": 2
+        },
+        "positiveAbstentionRate": {
+          "value": 0,
+          "count": 8
+        }
+      },
+      "objectiveScore": 0.75,
+      "disqualified": false
+    },
+    {
+      "label": "minLexicalScore=0.05",
+      "config": {
+        "minLexicalScore": 0.05,
+        "requireSymbolEvidence": false,
+        "requireModeCompatibility": false
+      },
+      "metrics": {
+        "queryCount": 10,
+        "positiveQueryCount": 8,
+        "negativeQueryCount": 2,
+        "recallAtK": {
+          "value": 1,
+          "count": 8
+        },
+        "precisionAtK": {
+          "value": 0.45833333333333337,
+          "count": 8
+        },
+        "precisionAmongReturned": {
+          "value": 0.45833333333333337,
+          "count": 8
+        },
+        "meanReciprocalRank": {
+          "value": 0.8541666666666666,
+          "count": 8
+        },
+        "noMatchFalsePositiveRate": {
+          "value": 0.5,
+          "count": 2
+        },
+        "positiveAbstentionRate": {
+          "value": 0,
+          "count": 8
+        }
+      },
+      "objectiveScore": 0.75,
+      "disqualified": false
+    },
+    {
+      "label": "minLexicalScore=0.1",
+      "config": {
+        "minLexicalScore": 0.1,
+        "requireSymbolEvidence": false,
+        "requireModeCompatibility": false
+      },
+      "metrics": {
+        "queryCount": 10,
+        "positiveQueryCount": 8,
+        "negativeQueryCount": 2,
+        "recallAtK": {
+          "value": 1,
+          "count": 8
+        },
+        "precisionAtK": {
+          "value": 0.5,
+          "count": 8
+        },
+        "precisionAmongReturned": {
+          "value": 0.5,
+          "count": 8
+        },
+        "meanReciprocalRank": {
+          "value": 0.8541666666666666,
+          "count": 8
+        },
+        "noMatchFalsePositiveRate": {
+          "value": 0,
+          "count": 2
+        },
+        "positiveAbstentionRate": {
+          "value": 0,
+          "count": 8
+        }
+      },
+      "objectiveScore": 1,
+      "disqualified": false
+    },
+    {
+      "label": "requireSymbolEvidence",
+      "config": {
+        "minLexicalScore": 0,
+        "requireSymbolEvidence": true,
+        "requireModeCompatibility": false
+      },
+      "metrics": {
+        "queryCount": 10,
+        "positiveQueryCount": 8,
+        "negativeQueryCount": 2,
+        "recallAtK": {
+          "value": 1,
+          "count": 8
+        },
+        "precisionAtK": {
+          "value": 0.5625,
+          "count": 8
+        },
+        "precisionAmongReturned": {
+          "value": 0.5625,
+          "count": 8
+        },
+        "meanReciprocalRank": {
+          "value": 0.8541666666666666,
+          "count": 8
+        },
+        "noMatchFalsePositiveRate": {
+          "value": 0,
+          "count": 2
+        },
+        "positiveAbstentionRate": {
+          "value": 0,
+          "count": 8
+        }
+      },
+      "objectiveScore": 1,
+      "disqualified": false
+    },
+    {
+      "label": "requireModeCompatibility",
+      "config": {
+        "minLexicalScore": 0,
+        "requireSymbolEvidence": false,
+        "requireModeCompatibility": true
+      },
+      "metrics": {
+        "queryCount": 10,
+        "positiveQueryCount": 8,
+        "negativeQueryCount": 2,
+        "recallAtK": {
+          "value": 1,
+          "count": 8
+        },
+        "precisionAtK": {
+          "value": 0.43750000000000006,
+          "count": 8
+        },
+        "precisionAmongReturned": {
+          "value": 0.43750000000000006,
+          "count": 8
+        },
+        "meanReciprocalRank": {
+          "value": 0.8541666666666666,
+          "count": 8
+        },
+        "noMatchFalsePositiveRate": {
+          "value": 0.5,
+          "count": 2
+        },
+        "positiveAbstentionRate": {
+          "value": 0,
+          "count": 8
+        }
+      },
+      "objectiveScore": 0.75,
+      "disqualified": false
+    },
+    {
+      "label": "minLexicalScore=0.05 + requireSymbolEvidence",
+      "config": {
+        "minLexicalScore": 0.05,
+        "requireSymbolEvidence": true,
+        "requireModeCompatibility": false
+      },
+      "metrics": {
+        "queryCount": 10,
+        "positiveQueryCount": 8,
+        "negativeQueryCount": 2,
+        "recallAtK": {
+          "value": 1,
+          "count": 8
+        },
+        "precisionAtK": {
+          "value": 0.5625,
+          "count": 8
+        },
+        "precisionAmongReturned": {
+          "value": 0.5625,
+          "count": 8
+        },
+        "meanReciprocalRank": {
+          "value": 0.8541666666666666,
+          "count": 8
+        },
+        "noMatchFalsePositiveRate": {
+          "value": 0,
+          "count": 2
+        },
+        "positiveAbstentionRate": {
+          "value": 0,
+          "count": 8
+        }
+      },
+      "objectiveScore": 1,
+      "disqualified": false
+    }
+  ],
+  "selected": {
+    "label": "requireSymbolEvidence",
+    "config": {
+      "minLexicalScore": 0,
+      "requireSymbolEvidence": true,
+      "requireModeCompatibility": false
+    },
+    "metrics": {
+      "queryCount": 10,
+      "positiveQueryCount": 8,
+      "negativeQueryCount": 2,
+      "recallAtK": {
+        "value": 1,
+        "count": 8
+      },
+      "precisionAtK": {
+        "value": 0.5625,
+        "count": 8
+      },
+      "precisionAmongReturned": {
+        "value": 0.5625,
+        "count": 8
+      },
+      "meanReciprocalRank": {
+        "value": 0.8541666666666666,
+        "count": 8
+      },
+      "noMatchFalsePositiveRate": {
+        "value": 0,
+        "count": 2
+      },
+      "positiveAbstentionRate": {
+        "value": 0,
+        "count": 8
+      }
+    },
+    "objectiveScore": 1,
+    "disqualified": false
+  },
+  "holdout": {
+    "config": {
+      "minLexicalScore": 0,
+      "requireSymbolEvidence": true,
+      "requireModeCompatibility": false
+    },
+    "metrics": {
+      "queryCount": 5,
+      "positiveQueryCount": 4,
+      "negativeQueryCount": 1,
+      "recallAtK": {
+        "value": 1,
+        "count": 4
+      },
+      "precisionAtK": {
+        "value": 0.7083333333333333,
+        "count": 4
+      },
+      "precisionAmongReturned": {
+        "value": 0.7083333333333333,
+        "count": 4
+      },
+      "meanReciprocalRank": {
+        "value": 1,
+        "count": 4
+      },
+      "noMatchFalsePositiveRate": {
+        "value": 0,
+        "count": 1
+      },
+      "positiveAbstentionRate": {
+        "value": 0,
+        "count": 4
+      }
+    }
+  }
+}

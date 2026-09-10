@@ -43,8 +43,24 @@ let cached: CachedIndex | undefined;
 async function computeFingerprint(uris: vscode.Uri[]): Promise<string> {
   const stats = await Promise.all(
     uris.map(async (uri) => {
-      const stat = await vscode.workspace.fs.stat(uri);
-      return `${uri.fsPath}:${stat.mtime}:${stat.size}`;
+      try {
+        const stat = await vscode.workspace.fs.stat(uri);
+        return `${uri.fsPath}:${stat.mtime}:${stat.size}`;
+      } catch {
+        // Deleted/inaccessible in the window between findFiles() and this
+        // stat() — a real race on a live workspace, not a hypothetical one.
+        // Previously this rejected the WHOLE Promise.all, which propagated
+        // out of getOrBuildRagIndex() uncaught and could leave a caller's
+        // request stuck (see runLlmRefinement()'s own fix for that). The
+        // actual read loop below already tolerates exactly this same race
+        // per-file (its own try/catch + onWarn, skipping just that file) —
+        // the fingerprint must be equally tolerant, or a transient race
+        // here would crash retrieval entirely before that loop even runs.
+        // Folding the file's own path into the "missing" marker still
+        // changes the fingerprint (forcing a rebuild) rather than masking
+        // the change, which is exactly what should happen either way.
+        return `${uri.fsPath}:MISSING`;
+      }
     })
   );
   return stats.sort().join('|');
@@ -55,7 +71,15 @@ async function computeFingerprint(uris: vscode.Uri[]): Promise<string> {
  * never throws for that. `onWarn`, if given, is called once per recipe
  * file that exists but fails to parse (e.g. malformed frontmatter from a
  * hand-edited file), so the caller can surface it (Output channel) without
- * this function needing to know how. */
+ * this function needing to know how — PLUS (F16) once more with an
+ * aggregate "N valid recipe(s) indexed; M skipped" summary whenever at
+ * least one file was skipped, so a `.github/rag/` folder that visibly
+ * contains files but silently indexes NONE of them (every one failed to
+ * parse) is never a purely invisible mismatch to a caller already
+ * surfacing `onWarn`'s own messages. Only called on an actual (re)build —
+ * a cache HIT (nothing changed since the last real build) calls `onWarn`
+ * zero times, same as it always has, since nothing new was re-derived to
+ * warn about. */
 export async function getOrBuildRagIndex(workspaceRoot: vscode.Uri, onWarn?: (message: string) => void): Promise<RagIndex | undefined> {
   const folder = ragFolderUri(workspaceRoot);
   let mdFiles: vscode.Uri[];
@@ -99,6 +123,21 @@ export async function getOrBuildRagIndex(workspaceRoot: vscode.Uri, onWarn?: (me
     // POSIX.
     const relativePath = path.relative(folder.fsPath, uri.fsPath).split(path.sep).join('/');
     recipes.push({ filePath: uri.fsPath, relativePath, frontmatter: parsed.value.frontmatter, body: parsed.value.body, mtimeMs });
+  }
+
+  // F16: a per-file skip reason (above) is easy to miss buried in the
+  // Output channel, and says nothing about the AGGREGATE picture — a
+  // workspace can have a `.github/rag/` folder a user can see files in,
+  // while the real indexed corpus is silently empty (every file present
+  // failed to parse), with no visible sign anywhere that a mismatch even
+  // exists. This one summary line — emitted only when there's an actual
+  // gap to report, never for the common all-valid case — makes that
+  // "visible library, empty index" mismatch impossible to miss for anyone
+  // already watching the same Output channel `onWarn`'s own per-file
+  // messages go to.
+  if (recipes.length < mdFiles.length) {
+    const skipped = mdFiles.length - recipes.length;
+    onWarn?.(`Indexed ${recipes.length} valid recipe(s); skipped ${skipped} file(s) that could not be read or parsed as a recipe — see the reason(s) above.`);
   }
 
   if (recipes.length === 0) {

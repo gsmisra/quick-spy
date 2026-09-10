@@ -5,6 +5,7 @@ import type { BaseLanguageModelInput } from '@langchain/core/language_models/bas
 import type { ChatResult } from '@langchain/core/outputs';
 import type { Runnable } from '@langchain/core/runnables';
 import { convertToOpenAIFunction } from '@langchain/core/utils/function_calling';
+import { assertMessagesFitModel } from '../llm/copilotClient';
 
 /**
  * Wraps an already-resolved `vscode.LanguageModelChat` (the exact same
@@ -81,6 +82,20 @@ export class VSCodeCopilotToolCallingModel extends BaseChatModel<VSCodeCopilotCa
       const fn = convertToOpenAIFunction(t as Parameters<typeof convertToOpenAIFunction>[0]);
       return { name: fn.name, description: fn.description ?? '', inputSchema: fn.parameters };
     });
+
+    // Same admission check llm/copilotClient.ts's sendPrompt() applies to
+    // its own single-shot prompt — here against the REAL assembled
+    // multi-message conversation (system/user/assistant turns, prior tool
+    // calls and their results all included), since this is the LangChain
+    // adapter both Total Agentic Mode (agentic/agenticChains.ts) and the
+    // Verify & Fix agent (agent/verifyFixAgent.ts) send every request
+    // through — the one place this accounting has to live to cover both.
+    // Thrown BEFORE `sendRequest` so a known-over-budget request never
+    // reaches the provider at all; left un-caught here (not folded into
+    // VSCodeCopilotRequestError below) since it's a distinct, already
+    // actionable failure — not "vscode.lm rejected the request," but "this
+    // extension itself declined to send it."
+    await assertMessagesFitModel(this.chatModel, vscodeMessages, this.cancellationToken);
 
     let response: vscode.LanguageModelChatResponse;
     try {

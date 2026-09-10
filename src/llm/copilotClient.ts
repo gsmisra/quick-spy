@@ -1,6 +1,9 @@
 import * as vscode from 'vscode';
 import * as crypto from 'crypto';
 import { TtlCache } from '../cache/ttlCache';
+import { decideTokenBudget, PromptTooLargeError } from './tokenBudget';
+
+export { PromptTooLargeError } from './tokenBudget';
 
 export interface CopilotModelInfo {
   id: string;
@@ -48,6 +51,73 @@ export class CopilotUnavailableError extends Error {
 }
 
 /**
+ * Counts each message's own token count via the model's REAL tokenizer
+ * (`LanguageModelChat.countTokens` — never a character-count heuristic) and
+ * throws `PromptTooLargeError` (tokenBudget.ts) BEFORE `sendRequest` is
+ * ever called once the total exceeds the model's safety-margined budget —
+ * see `decideTokenBudget()`'s own doc comment for the exact decision logic
+ * (including how an unmeasurable message is handled) and
+ * `PROMPT_TOKEN_SAFETY_MARGIN` for why the margin exists at all. Counting
+ * per-message avoids needing to hand-flatten a
+ * `vscode.LanguageModelChatMessage`'s own content parts (tool calls
+ * included) back into a single string just to count them.
+ *
+ * Shared by `sendPrompt()` below (a single user-turn prompt) and
+ * agent/vscodeCopilotToolCallingModel.ts's `_generate()` (a real
+ * multi-message LangChain conversation) — the ONE place this admission
+ * check needs to live for every path this extension has into Copilot, both
+ * the direct client and the LangChain adapter.
+ */
+export async function assertMessagesFitModel(
+  model: vscode.LanguageModelChat,
+  messages: vscode.LanguageModelChatMessage[],
+  token?: vscode.CancellationToken
+): Promise<void> {
+  const counts: (number | undefined)[] = [];
+  for (const message of messages) {
+    try {
+      counts.push(await model.countTokens(message, token));
+    } catch {
+      counts.push(undefined);
+    }
+  }
+  const decision = decideTokenBudget(counts, model.maxInputTokens);
+  if (decision.outcome === 'exceeds') {
+    throw new PromptTooLargeError(decision.totalTokens!, decision.maxInputTokens, decision.budget);
+  }
+  // 'fits' sends normally; 'unmeasured' also sends normally — see
+  // decideTokenBudget()'s own doc comment on why an unmeasured request is
+  // let through rather than blocked.
+}
+
+/**
+ * Sends `prompt` against an ALREADY-RESOLVED `model` handle and streams the
+ * response text via `onChunk` as it arrives. Split out from `sendPrompt()`
+ * below (F12) so a caller that must resolve a model earlier anyway — to
+ * measure a mandatory-token count and pack RAG content against that SAME
+ * model's own `maxInputTokens`/tokenizer, e.g.
+ * objectSpyPanel.ts's `runLlmRefinement()` — can reuse that EXACT handle
+ * for the actual send too, rather than `sendPrompt()`'s own internal
+ * `findModel()` potentially resolving a DIFFERENT one (Copilot's model
+ * list could, in principle, change between the two calls) and enforcing
+ * the real admission check against different numbers than packing itself
+ * planned for.
+ */
+export async function sendPromptWithModel(
+  model: vscode.LanguageModelChat,
+  prompt: string,
+  onChunk: (chunk: string) => void,
+  token: vscode.CancellationToken
+): Promise<void> {
+  const messages = [vscode.LanguageModelChatMessage.User(prompt)];
+  await assertMessagesFitModel(model, messages, token);
+  const response = await model.sendRequest(messages, {}, token);
+  for await (const fragment of response.text) {
+    onChunk(fragment);
+  }
+}
+
+/**
  * Sends `prompt` to the selected model and streams the response text via
  * `onChunk` as it arrives. VS Code shows a one-time consent dialog the
  * first time an extension calls this API in a session — that's the API's
@@ -55,6 +125,13 @@ export class CopilotUnavailableError extends Error {
  * automatic post-recording refinement pipeline — see objectSpyPanel.ts's
  * runLlmRefinement()) both only ever fire while the user has explicitly
  * turned on "Link with GitHub Copilot LLM" (Control Panel) and picked a model in Settings.
+ *
+ * Resolves the model exactly ONCE and reuses that same handle for both the
+ * token-budget preflight (`assertMessagesFitModel`) and the actual request
+ * — never a second, potentially different, resolution mid-request. A
+ * caller that ALREADY has a resolved model handle from earlier in the same
+ * logical request (e.g. for RAG packing) should call `sendPromptWithModel()`
+ * directly instead, to guarantee the send uses that EXACT same handle.
  */
 export async function sendPrompt(
   modelId: string,
@@ -66,11 +143,7 @@ export async function sendPrompt(
   if (!model) {
     throw new CopilotUnavailableError();
   }
-  const messages = [vscode.LanguageModelChatMessage.User(prompt)];
-  const response = await model.sendRequest(messages, {}, token);
-  for await (const fragment of response.text) {
-    onChunk(fragment);
-  }
+  await sendPromptWithModel(model, prompt, onChunk, token);
 }
 
 /**

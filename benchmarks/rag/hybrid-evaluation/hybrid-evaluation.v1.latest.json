@@ -1,0 +1,195 @@
+{
+  "datasetVersion": "1",
+  "generatedAt": "2026-09-10T00:25:11.896Z",
+  "providerId": "char-ngram-stand-in-v1:n3:d256",
+  "isStandInProvider": true,
+  "provisional": true,
+  "results": [
+    {
+      "split": "development",
+      "queryCount": 10,
+      "lexicalOnly": {
+        "queryCount": 10,
+        "positiveQueryCount": 8,
+        "negativeQueryCount": 2,
+        "recallAtK": {
+          "value": 0.875,
+          "count": 8
+        },
+        "precisionAtK": {
+          "value": 0.5,
+          "count": 8
+        },
+        "precisionAmongReturned": {
+          "value": 0.5,
+          "count": 8
+        },
+        "meanReciprocalRank": {
+          "value": 0.8125,
+          "count": 8
+        },
+        "noMatchFalsePositiveRate": {
+          "value": 0.5,
+          "count": 2
+        },
+        "positiveAbstentionRate": {
+          "value": 0,
+          "count": 8
+        }
+      },
+      "hybrid": {
+        "queryCount": 10,
+        "positiveQueryCount": 8,
+        "negativeQueryCount": 2,
+        "recallAtK": {
+          "value": 0.75,
+          "count": 8
+        },
+        "precisionAtK": {
+          "value": 0.4375,
+          "count": 8
+        },
+        "precisionAmongReturned": {
+          "value": 0.4375,
+          "count": 8
+        },
+        "meanReciprocalRank": {
+          "value": 0.75,
+          "count": 8
+        },
+        "noMatchFalsePositiveRate": {
+          "value": 0.5,
+          "count": 2
+        },
+        "positiveAbstentionRate": {
+          "value": 0,
+          "count": 8
+        }
+      }
+    },
+    {
+      "split": "holdout",
+      "queryCount": 5,
+      "lexicalOnly": {
+        "queryCount": 5,
+        "positiveQueryCount": 4,
+        "negativeQueryCount": 1,
+        "recallAtK": {
+          "value": 1,
+          "count": 4
+        },
+        "precisionAtK": {
+          "value": 0.625,
+          "count": 4
+        },
+        "precisionAmongReturned": {
+          "value": 0.625,
+          "count": 4
+        },
+        "meanReciprocalRank": {
+          "value": 1,
+          "count": 4
+        },
+        "noMatchFalsePositiveRate": {
+          "value": 1,
+          "count": 1
+        },
+        "positiveAbstentionRate": {
+          "value": 0,
+          "count": 4
+        }
+      },
+      "hybrid": {
+        "queryCount": 5,
+        "positiveQueryCount": 4,
+        "negativeQueryCount": 1,
+        "recallAtK": {
+          "value": 1,
+          "count": 4
+        },
+        "precisionAtK": {
+          "value": 0.625,
+          "count": 4
+        },
+        "precisionAmongReturned": {
+          "value": 0.625,
+          "count": 4
+        },
+        "meanReciprocalRank": {
+          "value": 1,
+          "count": 4
+        },
+        "noMatchFalsePositiveRate": {
+          "value": 1,
+          "count": 1
+        },
+        "positiveAbstentionRate": {
+          "value": 0,
+          "count": 4
+        }
+      }
+    },
+    {
+      "split": "all",
+      "queryCount": 15,
+      "lexicalOnly": {
+        "queryCount": 15,
+        "positiveQueryCount": 12,
+        "negativeQueryCount": 3,
+        "recallAtK": {
+          "value": 0.9166666666666666,
+          "count": 12
+        },
+        "precisionAtK": {
+          "value": 0.5416666666666666,
+          "count": 12
+        },
+        "precisionAmongReturned": {
+          "value": 0.5416666666666666,
+          "count": 12
+        },
+        "meanReciprocalRank": {
+          "value": 0.875,
+          "count": 12
+        },
+        "noMatchFalsePositiveRate": {
+          "value": 0.6666666666666666,
+          "count": 3
+        },
+        "positiveAbstentionRate": {
+          "value": 0,
+          "count": 12
+        }
+      },
+      "hybrid": {
+        "queryCount": 15,
+        "positiveQueryCount": 12,
+        "negativeQueryCount": 3,
+        "recallAtK": {
+          "value": 0.8333333333333334,
+          "count": 12
+        },
+        "precisionAtK": {
+          "value": 0.5,
+          "count": 12
+        },
+        "precisionAmongReturned": {
+          "value": 0.5,
+          "count": 12
+        },
+        "meanReciprocalRank": {
+          "value": 0.8333333333333334,
+          "count": 12
+        },
+        "noMatchFalsePositiveRate": {
+          "value": 0.6666666666666666,
+          "count": 3
+        },
+        "positiveAbstentionRate": {
+          "value": 0,
+          "count": 12
+        }
+      }
+    }
+  ]
+}

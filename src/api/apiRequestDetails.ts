@@ -90,6 +90,68 @@ export function hasApiRequest(details: ApiRequestDetails | undefined): boolean {
   return !!details && details.url.trim().length > 0;
 }
 
+const MAX_BODY_FIELD_NAMES = 30;
+const MAX_JSON_KEY_DEPTH = 4;
+
+/** Field NAMES only — NEVER values — pulled from the request body, for use
+ * as extra RAG retrieval signal (see rag/ragRetriever.ts's
+ * `retrieveRagMatches()` and objectSpyPanel.ts's `buildRagSection()`,
+ * which previously queried API mode by method+URL alone, e.g. just
+ * "POST /api/orders" — with no visibility at all into what the request
+ * body actually concerns). A field name like "cardNumber" or "keyspace" is
+ * useful lexical signal for matching a relevant reusable helper; the VALUE
+ * behind it could be arbitrary (and possibly sensitive) data with no
+ * retrieval value, so values are never inspected here regardless of
+ * `bodyMode` — this only ever collects the KEYS.
+ *
+ * `form-data`/`x-www-form-urlencoded` rows already carry their field names
+ * as plain, structured data (zero parsing risk). A `raw` body's field
+ * names are extracted only when it actually parses as JSON — a best-effort
+ * regex/heuristic extraction over arbitrary raw text (XML, GraphQL, plain
+ * text) risks pulling in noise rather than real field names, so anything
+ * that isn't valid JSON is left alone rather than guessed at; the
+ * method/URL and any linked Gherkin scenario text remain the query's other
+ * signal in that case. */
+export function extractApiBodyFieldNames(details: ApiRequestDetails): string[] {
+  const names = new Set<string>();
+  const add = (name: string): void => {
+    const trimmed = name.trim();
+    if (trimmed && names.size < MAX_BODY_FIELD_NAMES) {
+      names.add(trimmed);
+    }
+  };
+
+  if (details.bodyMode === 'form-data') {
+    details.bodyFormFields.forEach((field) => add(field.key));
+  } else if (details.bodyMode === 'x-www-form-urlencoded') {
+    details.bodyUrlencodedFields.forEach((field) => add(field.key));
+  } else if (details.bodyMode === 'raw' && details.bodyRaw.trim()) {
+    try {
+      collectJsonKeys(JSON.parse(details.bodyRaw), add, MAX_JSON_KEY_DEPTH);
+    } catch {
+      // Not JSON (or malformed) — no field names extracted from a raw body
+      // this extension can't safely parse the shape of.
+    }
+  }
+  return Array.from(names);
+}
+
+function collectJsonKeys(value: unknown, add: (name: string) => void, depthRemaining: number): void {
+  if (depthRemaining <= 0 || value === null || typeof value !== 'object') {
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectJsonKeys(item, add, depthRemaining - 1);
+    }
+    return;
+  }
+  for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+    add(key);
+    collectJsonKeys(nested, add, depthRemaining - 1);
+  }
+}
+
 /** Encrypts a credential value for embedding in the LLM prompt (see
  * security/secretVault.ts) — injected rather than imported directly so this
  * module stays free of any `vscode` dependency, consistent with the rest of

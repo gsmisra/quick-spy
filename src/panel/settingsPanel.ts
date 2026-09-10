@@ -3,16 +3,48 @@ import * as path from 'path';
 import { LANGUAGE_VERSIONS, Language, ObjectSpySettings, SettingsStore } from '../settings/settingsStore';
 import { listCopilotModels } from '../llm/copilotClient';
 import { generateRagCorpus, GenerationProgress, UploadedFile } from '../rag/ragCorpusGenerator';
-import { unzip } from '../rag/zipReader';
+import { readZipDirectory, extractZipEntryContent } from '../rag/zipReader';
 import { isNoiseDirectoryPath, isSupportedRagSourceFile } from '../rag/ragUploadFilters';
+import { getOrBuildFreshnessReport } from '../rag/ragFreshnessService';
+import { getSemanticApiKey, setSemanticApiKey, testEmbeddingProvider } from '../rag/ragHybridConfig';
 import { getSecretEnv, SECRET_ENV_VAR } from '../security/secretVault';
 
 /** Same per-file cap the drop zone enforces for a directly-dropped file
  * (settingsPanel.ts webview script's RAG_MAX_FILE_BYTES) — applied again
  * here to every individual entry extracted from an uploaded zip, since a
  * whole project archive can easily contain a file far larger than anyone
- * would drop by hand. */
+ * would drop by hand. Checked TWICE against a zip entry: once against its
+ * declared (central-directory) uncompressed size, before any decompression
+ * is attempted at all, and again as the hard `maxOutputBytes` ceiling zlib
+ * itself enforces DURING decompression — so a "small compressed, huge
+ * declared/actual decompressed size" entry (a zip bomb) is rejected either
+ * way, never fully inflated first and only checked afterward. */
 const RAG_MAX_ZIP_ENTRY_BYTES = 200 * 1024;
+
+/** Mirrors the webview drop zone's own `RAG_MAX_ZIP_BYTES` — re-checked here
+ * against the actual decoded buffer because the extension host must never
+ * trust a size claim made by the webview side of a postMessage; nothing
+ * stops a future bug (or a malicious message from something other than
+ * this extension's own webview) from sending an oversized payload directly. */
+const RAG_MAX_ZIP_UPLOAD_BYTES = 25 * 1024 * 1024;
+
+/** A real project zip realistically has, at most, a few thousand files —
+ * this bounds the central-directory parse itself against a crafted archive
+ * that declares an absurd entry count purely to waste CPU walking it (each
+ * entry read is cheap, but not free, and this is synchronous on the
+ * extension host). */
+const RAG_MAX_ZIP_ENTRIES = 20_000;
+
+/** Total decompressed bytes allowed across every entry actually extracted
+ * from ONE zip — the aggregate half of the "small archive, huge inflated
+ * total" zip-bomb shape that a per-entry cap alone doesn't cover (many
+ * entries each just under the per-entry cap, still adding up to a lot).
+ * Generous relative to the 25MB compressed upload cap above (a real
+ * project's text/config files rarely exceed a few-to-one compression
+ * ratio in aggregate) while still bounding the worst case. Extraction stops
+ * — rather than erroring the whole batch — the moment adding another entry
+ * would exceed this; every entry already extracted is kept. */
+const RAG_MAX_ZIP_AGGREGATE_BYTES = 75 * 1024 * 1024;
 
 type InboundMessage =
   | { type: 'update'; payload: Partial<ObjectSpySettings> }
@@ -20,6 +52,9 @@ type InboundMessage =
   | { type: 'openArchitectureDoc' }
   | { type: 'generateRagCorpus'; payload: { files: UploadedFile[] } }
   | { type: 'expandRagZip'; payload: { fileName: string; base64: string } }
+  | { type: 'checkRagFreshness' }
+  | { type: 'saveSemanticApiKey'; payload: { apiKey: string } }
+  | { type: 'testSemanticProvider'; payload: { endpoint: string; model: string } }
   | { type: 'copySecretKey' };
 
 /**
@@ -74,6 +109,7 @@ export class SettingsPanel implements vscode.Disposable {
     );
 
     this.postSettings(this.settingsStore.get());
+    void this.postSemanticKeyStatus();
   }
 
   dispose(): void {
@@ -95,6 +131,12 @@ export class SettingsPanel implements vscode.Disposable {
       await this.handleGenerateRagCorpus(message.payload.files);
     } else if (message.type === 'expandRagZip') {
       await this.handleExpandRagZip(message.payload.fileName, message.payload.base64);
+    } else if (message.type === 'checkRagFreshness') {
+      await this.handleCheckRagFreshness();
+    } else if (message.type === 'saveSemanticApiKey') {
+      await this.handleSaveSemanticApiKey(message.payload.apiKey);
+    } else if (message.type === 'testSemanticProvider') {
+      await this.handleTestSemanticProvider(message.payload.endpoint, message.payload.model);
     } else if (message.type === 'copySecretKey') {
       await this.copySecretKeyToClipboard();
     }
@@ -146,10 +188,28 @@ export class SettingsPanel implements vscode.Disposable {
   private async handleExpandRagZip(fileName: string, base64: string): Promise<void> {
     try {
       const buffer = Buffer.from(base64, 'base64');
-      const entries = unzip(buffer);
+      if (buffer.length > RAG_MAX_ZIP_UPLOAD_BYTES) {
+        throw new Error(`Zip is larger than ${(RAG_MAX_ZIP_UPLOAD_BYTES / (1024 * 1024)).toFixed(0)} MB — not processing it.`);
+      }
+
+      // Phase 1: read ONLY the central directory's metadata — no entry is
+      // decompressed yet. This is what lets every allowed-path/type/
+      // declared-size check below run BEFORE any decompression is
+      // attempted, rather than after (the bug this fixes: `unzip()` used to
+      // fully inflate every entry unconditionally, so a small compressed
+      // archive containing one hostile entry — or simply a large irrelevant
+      // generated file well within the noise-directory/extension filters
+      // below — could exhaust memory before those filters ever got a
+      // chance to help).
+      const directory = readZipDirectory(buffer);
+      if (directory.length > RAG_MAX_ZIP_ENTRIES) {
+        throw new Error(`Zip contains too many entries (${directory.length.toLocaleString()}, over the ${RAG_MAX_ZIP_ENTRIES.toLocaleString()} limit) — not processing it.`);
+      }
+
       const files: { fileName: string; relativePath: string; content: string }[] = [];
       let skipped = 0;
-      for (const entry of entries) {
+      let aggregateBytes = 0;
+      for (const entry of directory) {
         if (entry.isDirectory) {
           continue;
         }
@@ -157,11 +217,35 @@ export class SettingsPanel implements vscode.Disposable {
         const baseName = path.posix.basename(normalized);
         const dirPath = path.posix.dirname(normalized);
         const relativePath = dirPath === '.' ? '' : dirPath;
-        if (isNoiseDirectoryPath(relativePath) || !isSupportedRagSourceFile(baseName) || entry.content.byteLength > RAG_MAX_ZIP_ENTRY_BYTES) {
+
+        // Path/type/declared-size policy — checked entirely from directory
+        // metadata, before extractZipEntryContent() below ever runs.
+        if (isNoiseDirectoryPath(relativePath) || !isSupportedRagSourceFile(baseName) || entry.uncompressedSize > RAG_MAX_ZIP_ENTRY_BYTES) {
           skipped += 1;
           continue;
         }
-        files.push({ fileName: baseName, relativePath, content: entry.content.toString('utf-8') });
+        if (aggregateBytes + entry.uncompressedSize > RAG_MAX_ZIP_AGGREGATE_BYTES) {
+          // Aggregate cap reached — stop extracting further entries rather
+          // than erroring the whole batch; everything extracted so far is
+          // still handed back.
+          skipped += directory.length - directory.indexOf(entry);
+          break;
+        }
+
+        try {
+          // Phase 2: decompress THIS ONE entry, bounded by zlib's own
+          // maxOutputLength — never fully materializes more than
+          // RAG_MAX_ZIP_ENTRY_BYTES even if this entry's declared size (or
+          // its real compression ratio) lies about how large it really is.
+          const content = extractZipEntryContent(buffer, entry, { maxOutputBytes: RAG_MAX_ZIP_ENTRY_BYTES });
+          aggregateBytes += content.byteLength;
+          files.push({ fileName: baseName, relativePath, content: content.toString('utf-8') });
+        } catch {
+          // A single bad/oversized/corrupt entry (ZipEntryTooLargeError or
+          // otherwise) never aborts the whole zip — skip just this one,
+          // reflected in `skippedCount`, and keep going.
+          skipped += 1;
+        }
       }
       this.panel?.webview.postMessage({ type: 'ragZipExpanded', payload: { fileName, files, skippedCount: skipped } });
     } catch (err) {
@@ -206,26 +290,131 @@ export class SettingsPanel implements vscode.Disposable {
     const cts = new vscode.CancellationTokenSource();
     this.ragGenerationCts = cts;
 
-    const result = await generateRagCorpus({
-      modelId: settings.copilotModelId,
-      files,
-      workspaceRoot,
-      cancellationToken: cts.token,
-      onProgress: (progress: GenerationProgress) => {
-        this.panel?.webview.postMessage({ type: 'ragGenerationProgress', payload: progress });
-      },
-      confirmOverwrite: async (existingFileNames) => {
-        const choice = await vscode.window.showWarningMessage(
-          `${existingFileNames.length} recipe file(s) already exist in .github/rag and would be overwritten: ${existingFileNames.join(', ')}. Overwrite them?`,
-          { modal: true },
-          'Overwrite',
-          'Skip Existing'
-        );
-        return choice === 'Overwrite';
+    let result: { succeeded: number; skipped: number; failed: number };
+    try {
+      result = await generateRagCorpus({
+        modelId: settings.copilotModelId,
+        files,
+        workspaceRoot,
+        cancellationToken: cts.token,
+        onProgress: (progress: GenerationProgress) => {
+          // F14 fix: `this.ragGenerationCts` is REPLACED (not just its
+          // token flagged cancelled) the moment a NEWER batch starts —
+          // comparing identity against the `cts` THIS call closed over is
+          // the same "is this still the current request" pattern already
+          // used elsewhere in this codebase (e.g. objectSpyPanel.ts's
+          // `this.llmCancellation !== cts`). Without this, a batch that
+          // was superseded (its own `cancel()` already called above, but
+          // whose `generateRagCorpus()` promise is still running in the
+          // background) could keep posting progress lines into a NEWER
+          // batch's already-fresh, in-progress log — messages need to be
+          // scoped to the request that produced them, not just to
+          // whichever panel instance happens to still be open.
+          if (this.ragGenerationCts !== cts) {
+            return;
+          }
+          this.panel?.webview.postMessage({ type: 'ragGenerationProgress', payload: progress });
+        },
+        confirmOverwrite: async (existingFileNames) => {
+          const choice = await vscode.window.showWarningMessage(
+            `${existingFileNames.length} recipe file(s) already exist in .github/rag and would be overwritten: ${existingFileNames.join(', ')}. Overwrite them?`,
+            { modal: true },
+            'Overwrite',
+            'Skip Existing'
+          );
+          return choice === 'Overwrite';
+        }
+      });
+    } catch (err) {
+      if (this.ragGenerationCts !== cts) {
+        return; // superseded by a newer batch — its own eventual outcome is what the UI cares about now
       }
-    });
+      // Belt-and-suspenders: generateRagCorpus() is designed to always
+      // resolve, never reject (see its own doc comment) — but this call is
+      // awaited from a fire-and-forget message handler
+      // (webview.onDidReceiveMessage -> handleMessage), so if some future
+      // change (or an unexpected throw from the confirmOverwrite dialog
+      // itself) ever DOES let an exception through here, the webview must
+      // still get a terminal message regardless — otherwise "Generate"
+      // stays disabled forever with no way to recover short of reloading
+      // the whole Settings panel.
+      this.panel?.webview.postMessage({
+        type: 'ragGenerationDone',
+        payload: { succeeded: 0, skipped: 0, failed: files.length, error: err instanceof Error ? err.message : String(err) }
+      });
+      return;
+    }
 
+    if (this.ragGenerationCts !== cts) {
+      return; // superseded — never post a stale batch's final summary over a newer batch's in-progress UI
+    }
     this.panel?.webview.postMessage({ type: 'ragGenerationDone', payload: result });
+  }
+
+  /**
+   * "Check Freshness" (Reusable Components section) — the Settings panel's
+   * own front-end for Phase 5's active source-staleness check (see
+   * rag/ragFreshnessService.ts, rag/ragFreshnessChecker.ts), so a user can
+   * see per-recipe fresh/stale/missing/unverifiable/error state without
+   * leaving Settings; the exact same check also runs from the Command
+   * Palette ("SoftPlay: Check RAG Source Freshness" — see
+   * objectSpyPanel.ts's `checkRagSourceFreshness()`, which additionally
+   * logs to the SoftPlay output channel). Always forces a fresh check
+   * (`forceRefresh: true`) — a manually-clicked button should never show a
+   * stale cached answer about staleness itself.
+   */
+  private async handleCheckRagFreshness(): Promise<void> {
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri;
+    if (!workspaceRoot) {
+      this.panel?.webview.postMessage({
+        type: 'ragFreshnessResult',
+        payload: { error: 'Open a workspace folder first — recipes are read from its .github/rag folder.' }
+      });
+      return;
+    }
+    try {
+      const report = await getOrBuildFreshnessReport(workspaceRoot, { forceRefresh: true });
+      this.panel?.webview.postMessage({ type: 'ragFreshnessResult', payload: { report } });
+    } catch (err) {
+      this.panel?.webview.postMessage({
+        type: 'ragFreshnessResult',
+        payload: { error: err instanceof Error ? err.message : String(err) }
+      });
+    }
+  }
+
+  /**
+   * "Save Key" (Hybrid Retrieval section) — the ONE write path for the
+   * semantic-embedding provider's API key (Phase 6). Stored via VS Code's
+   * own `SecretStorage` (OS-keychain-backed), same posture as
+   * security/secretVault.ts's own master key — NEVER in `globalState`/
+   * settings.json, NEVER echoed back to the webview. An empty string
+   * CLEARS any previously saved key (see ragHybridConfig.ts's
+   * `setSemanticApiKey()`).
+   */
+  private async handleSaveSemanticApiKey(apiKey: string): Promise<void> {
+    await setSemanticApiKey(this.context, apiKey);
+    await this.postSemanticKeyStatus();
+  }
+
+  private async postSemanticKeyStatus(): Promise<void> {
+    const hasKey = !!(await getSemanticApiKey(this.context));
+    this.panel?.webview.postMessage({ type: 'semanticKeyStatus', payload: { hasKey } });
+  }
+
+  /**
+   * "Test Connection" (Hybrid Retrieval section) — the only place this
+   * extension calls a configured semantic endpoint OUTSIDE of a real
+   * retrieval request, so a user can confirm their configuration works
+   * before relying on it. Uses whatever endpoint/model the user currently
+   * has typed in the form (not yet necessarily saved) plus the
+   * ALREADY-SAVED API key, if any — embeds one generic test string, never
+   * real recipe/query content.
+   */
+  private async handleTestSemanticProvider(endpoint: string, model: string): Promise<void> {
+    const apiKey = await getSemanticApiKey(this.context);
+    const result = await testEmbeddingProvider({ endpoint, model, apiKey });
+    this.panel?.webview.postMessage({ type: 'semanticTestResult', payload: result });
   }
 
   /**
@@ -440,6 +629,68 @@ export class SettingsPanel implements vscode.Disposable {
     .rag-progress-line.error { color: var(--vscode-errorForeground, #f14c4c); }
     .rag-progress-line.skipped, .rag-progress-line.started { color: var(--vscode-descriptionForeground); }
     .rag-progress-line.done { font-weight: 600; color: var(--vscode-foreground); }
+    /* Freshness-check states (Phase 5) — reuses the same .rag-progress
+       container styling as generation progress, with its own color per
+       state (the class name is the state string itself, e.g. class="rag-
+       progress-line stale"): fresh=green (matches .success), stale=amber
+       (needs attention but not an error), missing/error=red (.error above
+       already covers "error"; "missing" gets the same treatment —
+       something's actually wrong either way), unverifiable=muted (nothing
+       to check, not a problem). */
+    .rag-progress-line.fresh { color: #3fb950; }
+    .rag-progress-line.stale { color: #d29922; }
+    .rag-progress-line.missing { color: var(--vscode-errorForeground, #f14c4c); }
+    .rag-progress-line.unverifiable { color: var(--vscode-descriptionForeground); }
+    .rag-text-input {
+      flex: 1;
+      min-width: 0;
+      padding: 4px 6px;
+      background: var(--vscode-input-background);
+      color: var(--vscode-input-foreground);
+      border: 1px solid var(--vscode-input-border, transparent);
+      border-radius: 2px;
+      font-family: var(--vscode-font-family);
+      font-size: 0.9em;
+    }
+    /* Collapsed-by-default "RAG and Agentic Settings" group (native
+       <details>/<summary> — no extra JS needed for the open/close behavior
+       itself) wrapping Total Agentic Mode plus every RAG-related section
+       (Reusable Components, Hybrid Retrieval, Generate RAG Corpus Format)
+       so a user who hasn't opted into either never has to scroll past
+       them. The <summary> is styled to match the page's own h2 section
+       headers, plus a small disclosure arrow. */
+    details.settings-group {
+      margin: 20px 0 8px;
+    }
+    details.settings-group summary {
+      cursor: pointer;
+      font-size: 1em;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--vscode-descriptionForeground);
+      border-bottom: 1px solid var(--vscode-panel-border);
+      padding-bottom: 4px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      user-select: none;
+    }
+    details.settings-group summary::-webkit-details-marker { display: none; }
+    details.settings-group summary::before {
+      content: '▶';
+      display: inline-block;
+      font-size: 0.7em;
+      transition: transform 0.15s ease;
+    }
+    details.settings-group[open] summary::before {
+      transform: rotate(90deg);
+    }
+    details.settings-group .settings-group-body {
+      padding-left: 2px;
+    }
+    details.settings-group .settings-group-body h2:first-of-type {
+      margin-top: 20px;
+    }
   </style>
 </head>
 <body>
@@ -499,23 +750,6 @@ export class SettingsPanel implements vscode.Disposable {
     <span class="status-text" id="copilotStatusText"></span>
   </div>
 
-  <h2>Mode</h2>
-  <div class="field">
-    <label>
-      Total Agentic Mode
-      <span class="hint">
-        Swaps the Control Panel sidebar for a file-drop-driven workflow: ingest requirement/data files, then generate
-        a feature file, automation code, and/or a Jira-importable manual test-case CSV — all built from the same
-        ingested files plus your custom instructions and RAG data. Standard mode's own recording workflow is
-        untouched and always available by switching back.
-      </span>
-    </label>
-    <div class="radio-group">
-      <label><input type="radio" name="agenticModeEnabled" value="false" /> Standard</label>
-      <label><input type="radio" name="agenticModeEnabled" value="true" /> Total Agentic Mode</label>
-    </div>
-  </div>
-
   <h2>Auto Password Encryption</h2>
   <p class="note" style="margin-top: 0;">
     Every credential SoftPlay detects (recorded UI fields, API Authorization tab values, and now the "Instant
@@ -536,6 +770,27 @@ export class SettingsPanel implements vscode.Disposable {
     credential this extension has ever encrypted for you.
   </p>
 
+  <details id="ragSettingsGroup" class="settings-group">
+  <summary>RAG and Agentic Settings</summary>
+  <div class="settings-group-body">
+
+  <h2>Mode</h2>
+  <div class="field">
+    <label>
+      Total Agentic Mode
+      <span class="hint">
+        Swaps the Control Panel sidebar for a file-drop-driven workflow: ingest requirement/data files, then generate
+        a feature file, automation code, and/or a Jira-importable manual test-case CSV — all built from the same
+        ingested files plus your custom instructions and RAG data. Standard mode's own recording workflow is
+        untouched and always available by switching back.
+      </span>
+    </label>
+    <div class="radio-group">
+      <label><input type="radio" name="agenticModeEnabled" value="false" /> Standard</label>
+      <label><input type="radio" name="agenticModeEnabled" value="true" /> Total Agentic Mode</label>
+    </div>
+  </div>
+
   <h2>Reusable Components (RAG)</h2>
   <div class="field">
     <label>
@@ -544,6 +799,51 @@ export class SettingsPanel implements vscode.Disposable {
     </label>
     <input type="checkbox" id="ragEnabledToggle" />
   </div>
+  <div class="field">
+    <label>
+      Source freshness
+      <span class="hint">Checks each recipe's recorded source file (if any) against its CURRENT content — flags one as stale, missing, or unverifiable so you know which recipes might need regenerating. Recipes with no recorded source (hand-authored, or generated before this existed) are reported as "unverifiable", not a problem.</span>
+    </label>
+    <button type="button" id="ragCheckFreshnessBtn" class="btn btn-secondary">Check Freshness</button>
+  </div>
+  <div id="ragFreshnessResult" class="rag-progress" hidden></div>
+
+  <h2>Hybrid Retrieval (Experimental)</h2>
+  <p class="note" style="margin-top: 0;">
+    Off by default. When enabled AND fully configured below, retrieval combines ordinary lexical (TF-IDF) matching
+    with SEMANTIC similarity from an external embedding endpoint you provide, via Reciprocal Rank Fusion — lexical
+    retrieval keeps working completely unaffected either way. <b>When active, your <code>.github/rag/</code> recipe
+    text and generation queries are sent to the endpoint below for embedding</b> — only configure one you trust.
+  </p>
+  <div class="field">
+    <label>
+      Enable hybrid retrieval
+      <span class="hint">Has no effect until an endpoint and model are also set below.</span>
+    </label>
+    <input type="checkbox" id="ragHybridEnabledToggle" />
+  </div>
+  <div class="field">
+    <label>Embedding endpoint URL</label>
+    <input type="text" id="ragSemanticEndpoint" class="rag-text-input" placeholder="https://api.example.com/v1/embeddings" />
+  </div>
+  <div class="field">
+    <label>Model</label>
+    <input type="text" id="ragSemanticModel" class="rag-text-input" placeholder="text-embedding-3-small" />
+  </div>
+  <div class="field">
+    <label>
+      API key
+      <span class="hint" id="ragSemanticKeyStatus">No key saved.</span>
+    </label>
+    <div style="display: flex; gap: 6px;">
+      <input type="password" id="ragSemanticApiKey" class="rag-text-input" placeholder="Leave blank to keep / clear" />
+      <button type="button" id="ragSaveKeyBtn" class="btn btn-secondary">Save Key</button>
+    </div>
+  </div>
+  <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px;">
+    <button type="button" id="ragTestConnectionBtn" class="btn btn-secondary">Test Connection</button>
+  </div>
+  <div id="ragSemanticTestResult" class="rag-progress" hidden></div>
 
   <h2>Generate RAG Corpus Format</h2>
   <p class="note" style="margin-top: 0;">
@@ -570,6 +870,9 @@ export class SettingsPanel implements vscode.Disposable {
     <button type="button" id="ragGenerateBtn" class="btn" disabled>Generate</button>
   </div>
   <div id="ragProgress" class="rag-progress" hidden></div>
+
+  </div>
+  </details>
 
   <p class="note">Changes apply immediately and persist across VS Code restarts.</p>
 
@@ -612,6 +915,89 @@ export class SettingsPanel implements vscode.Disposable {
       const ragEnabledToggle = document.getElementById('ragEnabledToggle');
       ragEnabledToggle.addEventListener('change', () => {
         vscode.postMessage({ type: 'update', payload: { ragEnabled: ragEnabledToggle.checked } });
+      });
+
+      // --- "Check Freshness" (Phase 5: active source-staleness check) ---
+      const ragCheckFreshnessBtn = document.getElementById('ragCheckFreshnessBtn');
+      const ragFreshnessResultEl = document.getElementById('ragFreshnessResult');
+      ragCheckFreshnessBtn.addEventListener('click', () => {
+        ragCheckFreshnessBtn.disabled = true;
+        ragFreshnessResultEl.hidden = false;
+        ragFreshnessResultEl.innerHTML = '';
+        const line = document.createElement('div');
+        line.className = 'rag-progress-line started';
+        line.textContent = 'Checking…';
+        ragFreshnessResultEl.appendChild(line);
+        vscode.postMessage({ type: 'checkRagFreshness' });
+      });
+
+      function renderFreshnessResult(payload) {
+        ragCheckFreshnessBtn.disabled = false;
+        ragFreshnessResultEl.innerHTML = '';
+        if (payload.error) {
+          const line = document.createElement('div');
+          line.className = 'rag-progress-line error';
+          line.textContent = payload.error;
+          ragFreshnessResultEl.appendChild(line);
+          return;
+        }
+        const report = payload.report;
+        if (report.entries.length === 0) {
+          const line = document.createElement('div');
+          line.className = 'rag-progress-line skipped';
+          line.textContent = 'No RAG recipes found under .github/rag.';
+          ragFreshnessResultEl.appendChild(line);
+          return;
+        }
+        report.entries.forEach((entry) => {
+          const line = document.createElement('div');
+          line.className = 'rag-progress-line ' + entry.state;
+          line.textContent = '[' + entry.state.toUpperCase() + '] ' + entry.relativePath + ' — ' + entry.detail;
+          ragFreshnessResultEl.appendChild(line);
+        });
+        const c = report.counts;
+        const summary = document.createElement('div');
+        summary.className = 'rag-progress-line done';
+        summary.textContent =
+          'Summary: ' + report.entries.length + ' recipe(s) — ' + c.fresh + ' fresh, ' + c.stale + ' stale, ' +
+          c.missing + ' missing, ' + c.unverifiable + ' unverifiable, ' + c.error + ' error(s).';
+        ragFreshnessResultEl.appendChild(summary);
+      }
+
+      // --- Hybrid Retrieval (Experimental) — Phase 6 ---
+      const ragHybridEnabledToggle = document.getElementById('ragHybridEnabledToggle');
+      const ragSemanticEndpointInput = document.getElementById('ragSemanticEndpoint');
+      const ragSemanticModelInput = document.getElementById('ragSemanticModel');
+      const ragSemanticApiKeyInput = document.getElementById('ragSemanticApiKey');
+      const ragSemanticKeyStatusEl = document.getElementById('ragSemanticKeyStatus');
+      const ragSaveKeyBtn = document.getElementById('ragSaveKeyBtn');
+      const ragTestConnectionBtn = document.getElementById('ragTestConnectionBtn');
+      const ragSemanticTestResultEl = document.getElementById('ragSemanticTestResult');
+
+      ragHybridEnabledToggle.addEventListener('change', () => {
+        vscode.postMessage({ type: 'update', payload: { ragHybridEnabled: ragHybridEnabledToggle.checked } });
+      });
+      ragSemanticEndpointInput.addEventListener('change', () => {
+        vscode.postMessage({ type: 'update', payload: { ragSemanticEndpoint: ragSemanticEndpointInput.value.trim() } });
+      });
+      ragSemanticModelInput.addEventListener('change', () => {
+        vscode.postMessage({ type: 'update', payload: { ragSemanticModel: ragSemanticModelInput.value.trim() } });
+      });
+      ragSaveKeyBtn.addEventListener('click', () => {
+        vscode.postMessage({ type: 'saveSemanticApiKey', payload: { apiKey: ragSemanticApiKeyInput.value } });
+        ragSemanticApiKeyInput.value = '';
+      });
+      ragTestConnectionBtn.addEventListener('click', () => {
+        ragSemanticTestResultEl.hidden = false;
+        ragSemanticTestResultEl.innerHTML = '';
+        const line = document.createElement('div');
+        line.className = 'rag-progress-line started';
+        line.textContent = 'Testing…';
+        ragSemanticTestResultEl.appendChild(line);
+        vscode.postMessage({
+          type: 'testSemanticProvider',
+          payload: { endpoint: ragSemanticEndpointInput.value.trim(), model: ragSemanticModelInput.value.trim() }
+        });
       });
 
       // --- "Generate RAG Corpus format" — drop zone / file picker / Generate ---
@@ -849,6 +1235,24 @@ export class SettingsPanel implements vscode.Disposable {
           }
           return;
         }
+        if (message.type === 'ragFreshnessResult') {
+          renderFreshnessResult(message.payload);
+          return;
+        }
+        if (message.type === 'semanticKeyStatus') {
+          ragSemanticKeyStatusEl.textContent = message.payload.hasKey ? 'A key is saved.' : 'No key saved.';
+          return;
+        }
+        if (message.type === 'semanticTestResult') {
+          const r = message.payload;
+          ragSemanticTestResultEl.hidden = false;
+          ragSemanticTestResultEl.innerHTML = '';
+          const line = document.createElement('div');
+          line.className = 'rag-progress-line ' + (r.ok ? 'success' : 'error');
+          line.textContent = r.message;
+          ragSemanticTestResultEl.appendChild(line);
+          return;
+        }
         if (message.type === 'ragGenerationProgress') {
           const p = message.payload;
           ragAppendProgressLine(p.fileName, p.status, p.message);
@@ -886,6 +1290,13 @@ export class SettingsPanel implements vscode.Disposable {
         languageSelect.value = settings.language;
         renderVersions(settings.language, settings.languageVersion);
         ragEnabledToggle.checked = settings.ragEnabled;
+        ragHybridEnabledToggle.checked = settings.ragHybridEnabled;
+        if (document.activeElement !== ragSemanticEndpointInput) {
+          ragSemanticEndpointInput.value = settings.ragSemanticEndpoint;
+        }
+        if (document.activeElement !== ragSemanticModelInput) {
+          ragSemanticModelInput.value = settings.ragSemanticModel;
+        }
         document.querySelectorAll('input[name="agenticModeEnabled"]').forEach((radio) => {
           radio.checked = radio.value === String(settings.agenticModeEnabled);
         });

@@ -1,0 +1,271 @@
+{
+  "datasetVersion": "1",
+  "recipes": [
+    {
+      "id": "postgres-query-one",
+      "title": "Query a Postgres table and validate a result",
+      "tags": ["postgres", "postgresql", "database", "query"],
+      "automationMode": ["ui", "api"],
+      "language": ["java"],
+      "relativePath": "database/postgres/postgres-query-one.md",
+      "body": "Connects via the shared PostgresHelper and runs a parameterized query.\n\n```java\nvar row = PostgresHelper.queryOne(conn, sql, id);\n```",
+      "imports": { "java": ["com.acme.testutil.db.PostgresHelper"] }
+    },
+    {
+      "id": "postgres-query-one-py",
+      "title": "Query a Postgres table and validate a result (Python)",
+      "tags": ["postgres", "postgresql", "database", "query"],
+      "automationMode": ["ui", "api"],
+      "language": ["python"],
+      "relativePath": "database/postgres/postgres_query_one.md",
+      "body": "Connects via the shared postgres_helper module and runs a parameterized query.\n\n```python\nrow = postgres_helper.query_one(conn, sql, params)\n```",
+      "imports": { "python": ["testutil.db.postgres_helper"] }
+    },
+    {
+      "id": "cassandra-connection-helper",
+      "title": "Connection helper",
+      "tags": ["database", "query"],
+      "automationMode": ["ui", "api"],
+      "language": ["java"],
+      "relativePath": "database/cassandra/connection-helper.md",
+      "body": "Opens a session and runs a CQL query against the configured keyspace.\n\n```java\nvar row = ConnectionHelper.queryOne(session, cql, id);\n```",
+      "imports": { "java": ["com.acme.testutil.db.ConnectionHelper"] }
+    },
+    {
+      "id": "mysql-query-helper",
+      "title": "Query a MySQL table",
+      "tags": ["mysql", "database", "query"],
+      "automationMode": ["ui", "api"],
+      "language": ["java"],
+      "relativePath": "database/mysql/mysql-query-helper.md",
+      "body": "Connects via the shared MysqlHelper and executes a query.\n\n```java\nvar row = MysqlHelper.queryOne(conn, sql, id);\n```",
+      "imports": { "java": ["com.acme.testutil.db.MysqlHelper"] }
+    },
+    {
+      "id": "kafka-producer-helper",
+      "title": "Publish a Kafka event",
+      "tags": ["kafka", "messaging", "producer", "event"],
+      "automationMode": ["api"],
+      "language": ["java"],
+      "relativePath": "messaging/kafka/kafka-producer-helper.md",
+      "body": "Publishes a message to the configured topic and waits for the send to complete.\n\n```java\nKafkaProducerHelper.publish(topic, key, payload);\n```",
+      "imports": { "java": ["com.acme.testutil.messaging.KafkaProducerHelper"] }
+    },
+    {
+      "id": "screenshot-helper",
+      "title": "Take a screenshot and save it to disk",
+      "tags": ["screenshot", "ui", "debugging"],
+      "automationMode": ["ui"],
+      "language": ["python"],
+      "relativePath": "ui/screenshot-helper.md",
+      "body": "Captures the current page and writes it to the given path.\n\n```python\ntake_screenshot(page, \"out.png\")\n```",
+      "imports": { "python": ["testutil.screenshot"] }
+    },
+    {
+      "id": "api-auth-token-helper",
+      "title": "Attach a bearer auth token to an API request",
+      "tags": ["api", "auth", "bearer", "token"],
+      "automationMode": ["api"],
+      "language": ["java"],
+      "relativePath": "api/auth/api-auth-token-helper.md",
+      "body": "Fetches a fresh bearer token and attaches it to the request's Authorization header.\n\n```java\nAuthTokenHelper.attachBearerToken(request);\n```",
+      "imports": { "java": ["com.acme.testutil.api.AuthTokenHelper"] }
+    },
+    {
+      "id": "api-request-assertion-helper",
+      "title": "Assert an API response's status code and body shape",
+      "tags": ["api", "assertion", "response", "status"],
+      "automationMode": ["api"],
+      "language": ["java"],
+      "relativePath": "api/assertions/api-request-assertion-helper.md",
+      "body": "Validates the response status code and that the body matches the expected shape.\n\n```java\nApiAssertions.assertSuccessful(response);\n```",
+      "imports": { "java": ["com.acme.testutil.api.ApiAssertions"] }
+    },
+    {
+      "id": "api-response-validator-helper",
+      "title": "Validate an API response is successful",
+      "tags": ["api", "response", "validation", "status"],
+      "automationMode": ["api"],
+      "language": ["java"],
+      "relativePath": "api/assertions/api-response-validator-helper.md",
+      "body": "An alternative helper that checks a response is a 2xx with a non-empty body.\n\n```java\nResponseValidator.validateOk(response);\n```",
+      "imports": { "java": ["com.acme.testutil.api.ResponseValidator"] }
+    }
+  ],
+  "queries": [
+    {
+      "queryId": "dev-positive-exact",
+      "language": "java",
+      "automationMode": "api",
+      "split": "development",
+      "origin": "synthetic",
+      "datasetVersion": "1",
+      "queryText": "Login to Postgres database, query a specific table using a query, validate the result",
+      "relevantIds": ["postgres-query-one"],
+      "rationale": "Direct, near-exact wording match against the postgres-query-one recipe's own title/tags."
+    },
+    {
+      "queryId": "dev-paraphrase",
+      "language": "java",
+      "automationMode": "api",
+      "split": "development",
+      "origin": "synthetic",
+      "datasetVersion": "1",
+      "queryText": "open a database connection and run a query against the orders table to check the returned value",
+      "relevantIds": ["postgres-query-one"],
+      "rationale": "Paraphrase of dev-positive-exact — no exact phrase overlap ('open'/'orders' not in the recipe), tests semantic/lexical robustness beyond literal string matching."
+    },
+    {
+      "queryId": "dev-identifier-reference",
+      "language": "java",
+      "automationMode": "api",
+      "split": "development",
+      "origin": "synthetic",
+      "datasetVersion": "1",
+      "queryText": "use PostgresHelper.queryOne to fetch a row from the accounts table for validation",
+      "relevantIds": ["postgres-query-one"],
+      "rationale": "References the recipe's own compound identifier (PostgresHelper.queryOne) directly — tests camelCase/identifier-splitting tokenization (tfidfEmbeddings.ts's extractFeatures)."
+    },
+    {
+      "queryId": "dev-language-incompatibility",
+      "language": "python",
+      "automationMode": "api",
+      "split": "development",
+      "origin": "synthetic",
+      "datasetVersion": "1",
+      "queryText": "Login to Postgres database, query a specific table using a query, validate the result",
+      "relevantIds": ["postgres-query-one-py"],
+      "rationale": "Identical wording to dev-positive-exact but language=python — the JAVA-only postgres-query-one must be excluded by the hard language filter; only the Python twin should surface."
+    },
+    {
+      "queryId": "dev-vendor-mismatch",
+      "language": "java",
+      "automationMode": "api",
+      "split": "development",
+      "origin": "synthetic",
+      "datasetVersion": "1",
+      "queryText": "connect to a mysql database and execute a query to check a row",
+      "relevantIds": ["mysql-query-helper"],
+      "rationale": "Vendor-specific wording (mysql) among multiple same-shaped database helpers (postgres, mysql, cassandra) — tests that vendor names are never conflated/canonicalized onto each other."
+    },
+    {
+      "queryId": "dev-misleading-shared-vocab-cassandra",
+      "language": "java",
+      "automationMode": "ui",
+      "split": "development",
+      "origin": "synthetic",
+      "datasetVersion": "1",
+      "queryText": "Verify all the details validated on the UI page are also validated in this cassandra table, write a query to validate the table",
+      "relevantIds": ["cassandra-connection-helper"],
+      "rationale": "Real-world regression case from this project's own bug history: shares generic vocabulary ('database', 'query', 'validate') with postgres/mysql recipes, but the word 'cassandra' only appears in the target recipe's FOLDER name, not its title/tags/body — must still rank first via folder-name matching, not get outranked by the shared-vocabulary noise."
+    },
+    {
+      "queryId": "dev-multiple-required-operations",
+      "language": "java",
+      "automationMode": "api",
+      "split": "development",
+      "origin": "synthetic",
+      "datasetVersion": "1",
+      "queryText": "connect to postgres to fetch the order data, then publish a kafka event with the result",
+      "operations": [
+        { "operationId": "op-1", "text": "connect to postgres to fetch the order data" },
+        { "operationId": "op-2", "text": "publish a kafka event with the result" }
+      ],
+      "relevantIds": ["postgres-query-one", "kafka-producer-helper"],
+      "rationale": "Two DIFFERENT required capabilities in one request. The LEGACY/BASELINE benchmark mode (runBenchmarkOnDataset(), F15) deliberately ignores `operations` and scores this as a single whole-query retrieval call with topK=2 — real, expected recall<1 there. The PRODUCTION-PIPELINE mode (runProductionPipelineOnDataset()) DOES use `operations` for real per-operation retrieval, exactly like the actual application (Phase 3) — this case is exactly what distinguishes the two modes from each other."
+    },
+    {
+      "queryId": "dev-repeated-operation",
+      "language": "java",
+      "automationMode": "api",
+      "split": "development",
+      "origin": "synthetic",
+      "datasetVersion": "1",
+      "queryText": "query postgres for the customer row, then query postgres again for the linked order row",
+      "operations": [
+        { "operationId": "op-1", "text": "query postgres for the customer row" },
+        { "operationId": "op-2", "text": "query postgres again for the linked order row" }
+      ],
+      "relevantIds": ["postgres-query-one"],
+      "rationale": "The SAME capability needed twice — only one distinct helper is required, not two. `operations` here is used by the PRODUCTION-PIPELINE benchmark mode (runProductionPipelineOnDataset(), Phase 3's real per-operation retrieval) but deliberately ignored by the LEGACY/BASELINE mode (runBenchmarkOnDataset()), which always scores this as one whole-query call regardless."
+    },
+    {
+      "queryId": "dev-empty-query",
+      "language": "java",
+      "automationMode": "api",
+      "split": "development",
+      "origin": "synthetic",
+      "datasetVersion": "1",
+      "queryText": "   ",
+      "relevantIds": [],
+      "rationale": "A whitespace-only query must return zero matches without erroring — retrieveRagMatches() already special-cases this."
+    },
+    {
+      "queryId": "dev-no-match",
+      "language": "java",
+      "automationMode": "api",
+      "split": "development",
+      "origin": "synthetic",
+      "datasetVersion": "1",
+      "queryText": "generate a random UUID value for use as a unique test identifier",
+      "relevantIds": [],
+      "rationale": "Deliberate no-match case — nothing in the corpus concerns UUID generation. (Earlier wording accidentally shared 'debugging' with screenshot-helper's own tags and produced a real false positive here — the benchmark itself caught that dataset-authoring mistake, which is exactly what it's for.)"
+    },
+    {
+      "queryId": "holdout-positive-cassandra",
+      "language": "java",
+      "automationMode": "api",
+      "split": "holdout",
+      "origin": "synthetic",
+      "datasetVersion": "1",
+      "queryText": "query the cassandra keyspace to validate a stored value",
+      "relevantIds": ["cassandra-connection-helper"],
+      "rationale": "Held-out positive case for the same cassandra folder-matching capability as dev-misleading-shared-vocab-cassandra, with different wording, kept in a separate split to avoid leakage."
+    },
+    {
+      "queryId": "holdout-api-auth",
+      "language": "java",
+      "automationMode": "api",
+      "split": "holdout",
+      "origin": "synthetic",
+      "datasetVersion": "1",
+      "queryText": "add a bearer token to the request before calling the API",
+      "relevantIds": ["api-auth-token-helper"],
+      "rationale": "Held-out positive case for the API auth-token helper."
+    },
+    {
+      "queryId": "holdout-alternative-helpers",
+      "language": "java",
+      "automationMode": "api",
+      "split": "holdout",
+      "origin": "synthetic",
+      "datasetVersion": "1",
+      "queryText": "call the API and check the response came back successfully",
+      "relevantIds": [],
+      "alternativeGroups": [["api-request-assertion-helper", "api-response-validator-helper"]],
+      "rationale": "Either of the two near-duplicate API-response-checking helpers satisfies this request — an alternative-helper group, not two independently required capabilities."
+    },
+    {
+      "queryId": "holdout-language-incompatibility-python",
+      "language": "python",
+      "automationMode": "api",
+      "split": "holdout",
+      "origin": "synthetic",
+      "datasetVersion": "1",
+      "queryText": "python script that talks to postgres and fetches rows for validation",
+      "relevantIds": ["postgres-query-one-py"],
+      "rationale": "Held-out Python-language positive case, distinct wording from dev-language-incompatibility."
+    },
+    {
+      "queryId": "holdout-no-match-ui",
+      "language": "python",
+      "automationMode": "ui",
+      "split": "holdout",
+      "origin": "synthetic",
+      "datasetVersion": "1",
+      "queryText": "resize the browser window to a custom viewport size before starting the test",
+      "relevantIds": [],
+      "rationale": "Deliberate no-match case in the holdout split — nothing in the corpus concerns viewport/window sizing."
+    }
+  ]
+}
