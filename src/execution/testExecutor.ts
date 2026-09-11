@@ -137,7 +137,8 @@ const JUNIT_PLATFORM_SUITE_VERSION = '1.11.0';
  * to use exactly that instead of hunting for its own bundled one, which is
  * both smaller and avoids needing driver-bundle in the repo at all. Windows-
  * only for now (matches this extension's existing Windows-only scope, e.g.
- * detectPrimaryScreenSize() in codegenManager.ts) — falls back to leaving
+ * the Program Files/LOCALAPPDATA executable-path resolution codegenManager.ts
+ * injects into generated code) — falls back to leaving
  * Playwright's dependency untouched (its own driver-bundle download) on any
  * other OS/if the bundled node.exe isn't found, e.g. a dev checkout that
  * hasn't run the resources prep step.

@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { spawn, execFile, ChildProcess } from 'child_process';
+import { spawn, ChildProcess } from 'child_process';
 import { Language, BrowserChannel } from '../settings/settingsStore';
 
 export type CodegenStatus =
@@ -95,57 +95,32 @@ export class CodegenManager implements vscode.Disposable {
     // navigate to "", which is not the same thing.
     const trimmedUrl = url.trim();
     const normalizedUrl = trimmedUrl ? normalizeUrl(trimmedUrl) : '';
-    // codegen's CLI has no "launch maximized"/"fullscreen" switch of its
-    // own — the closest, actually-supported lever is `--viewport-size`,
-    // which sizes the *page content area* (never the outer window chrome
-    // — title bar, tab strip, address bar — around it). Matching it to the
-    // user's real primary-monitor resolution is what "opens full screen and
-    // shows the entire webpage in view" concretely means here: the recorded
-    // page fills the whole screen instead of Playwright's own small
-    // (800x600-ish) default. Falls back to a generous 1920x1080 (the single
-    // most common desktop resolution) if the real one can't be detected —
-    // every recording still gets a large viewport either way, never a
-    // silent revert to the tiny default.
-    //
-    // Reproduced bug fix: requesting a viewport EXACTLY as tall as the full
-    // screen used to make the browser's OUTER window taller than the
-    // screen — `--viewport-size` sizes the content area alone, so the
-    // window Chrome/Edge actually opens is that height PLUS its own title
-    // bar/tab strip/address bar (roughly BROWSER_CHROME_HEIGHT_RESERVE
-    // below), which no longer fits the display at all — the window (and
-    // the whole web app inside it) got positioned at the top of the screen
-    // and its BOTTOM portion extended past the visible screen, with no way
-    // to see or scroll to it (zooming the PAGE out never changes the
-    // window's own outer size). `detectPrimaryScreenSize()` below now
-    // returns the monitor's usable WORKING area (excluding the taskbar,
-    // which a normal window can never be sized/positioned over) rather
-    // than its raw bounds, and `BROWSER_CHROME_HEIGHT_RESERVE` is
-    // subtracted from that height here so the OUTER window — content plus
-    // chrome — fits entirely within the visible screen, top to bottom.
-    const { width, height } = await detectPrimaryScreenSize();
-    const viewportHeight = Math.max(1, height - BROWSER_CHROME_HEIGHT_RESERVE);
-    const args = [
-      cliPath,
-      'codegen',
-      `--target=${target}`,
-      `--channel=${channel}`,
-      `--viewport-size=${width},${viewportHeight}`,
-      '-o',
-      this.outputFile
-    ];
+    const args = [cliPath, 'codegen', `--target=${target}`, `--channel=${channel}`, '-o', this.outputFile];
     if (normalizedUrl) {
       args.push(normalizedUrl);
     }
 
     this.setStatus({ state: 'starting' });
     this.log(
-      `Starting native Playwright codegen: --target=${target} --channel=${channel} --viewport-size=${width},${viewportHeight}` +
+      `Starting native Playwright codegen: --target=${target} --channel=${channel}` +
         `${normalizedUrl ? ' ' + normalizedUrl : ' (no URL — opens blank)'}`
     );
 
-    const child = spawn(process.execPath, args, { detached: true, stdio: 'ignore' });
+    // stderr is piped (not ignored) purely so a fast, non-zero exit can be
+    // diagnosed — in particular Playwright's own "Chromium distribution
+    // 'chrome'/'msedge' is not found at <path>" error when the selected
+    // browser isn't actually installed on this machine, which otherwise
+    // exits almost immediately with the codegen window never appearing at
+    // all and no visible signal beyond the status silently reverting to
+    // idle (see the exit handler below).
+    const child = spawn(process.execPath, args, { detached: true, stdio: ['ignore', 'ignore', 'pipe'] });
     child.unref();
     this.child = child;
+
+    let stderrOutput = '';
+    child.stderr?.on('data', (chunk: Buffer) => {
+      stderrOutput += chunk.toString();
+    });
 
     child.once('exit', (code) => {
       // Only react if this is still the child we're tracking — a Stop
@@ -154,11 +129,26 @@ export class CodegenManager implements vscode.Disposable {
       if (this.child === child) {
         this.stopPolling();
         this.child = undefined;
-        if (this.status.state !== 'idle') {
-          this.setStatus({ state: 'idle' });
-        }
         if (code !== null && code !== 0) {
-          this.log(`Native Playwright codegen exited with code ${code} — the codegen window may have been closed manually.`);
+          const label = browserChannel === 'edge' ? 'Edge' : 'Chrome';
+          // Matches Playwright's own real error text, e.g. "Chromium
+          // distribution 'chrome' is not found at C:\...\chrome.exe" —
+          // the exact failure reproduced when the selected browser isn't
+          // installed on this machine at all.
+          if (/is not found at|distribution .* is not found/i.test(stderrOutput)) {
+            const message = `${label} is not installed on this machine — SoftPlay launches the real, already-installed ${label} directly and never downloads a browser of its own. Install ${label}, then try again.`;
+            this.log(`Native Playwright codegen failed to launch: ${stderrOutput.trim()}`);
+            this.setStatus({ state: 'error', message });
+            void vscode.window.showErrorMessage(message);
+            return;
+          }
+          this.log(
+            `Native Playwright codegen exited with code ${code}` +
+              (stderrOutput.trim() ? ` — ${stderrOutput.trim()}` : ' — the codegen window may have been closed manually.')
+          );
+        }
+        if (this.status.state !== 'idle' && this.status.state !== 'error') {
+          this.setStatus({ state: 'idle' });
         }
       }
     });
@@ -277,63 +267,6 @@ function normalizeUrl(input: string): string {
 
 function describeError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
-}
-
-const DEFAULT_SCREEN_SIZE = { width: 1920, height: 1080 };
-
-/** Approximate extra vertical space Chrome/Edge's own OUTER window chrome
- * (title bar + tab strip + toolbar/address bar) occupies ABOVE the page
- * content area on Windows at 100% display scaling — `--viewport-size`
- * sizes ONLY that inner content area, so this must be subtracted from the
- * detected screen height before use, or the browser's real outer window
- * ends up taller than the screen itself. Deliberately a bit generous
- * (real chrome height is usually closer to ~90-110px with no bookmarks
- * bar shown) — a SLIGHTLY smaller-than-necessary viewport still leaves the
- * ENTIRE window (and so the entire page) visible and fully reachable,
- * which is the actual requirement; a viewport that's a few px larger than
- * it should be is what silently pushes the window's bottom edge past the
- * visible screen with no way to scroll to it — the exact reported bug this
- * constant fixes. Windows-only, matching `detectPrimaryScreenSize()`'s own
- * scope — this number is never applied to `DEFAULT_SCREEN_SIZE`'s own
- * fallback path below, which already reserves its own margin by using a
- * common resolution rather than claiming a real, exact screen size. */
-const BROWSER_CHROME_HEIGHT_RESERVE = 140;
-
-/** Queries the real primary-monitor's USABLE working area (its full
- * resolution MINUS the taskbar and any other always-on-top OS chrome — a
- * normal, non-fullscreen-exclusive window can never be sized or positioned
- * to overlap that area at all) via .NET's own `System.Windows.Forms.Screen`
- * (Windows only — there is no portable, dependency-free way to ask the OS
- * this from a plain Node.js extension host process) so codegen's
- * `--viewport-size` can fill the actual VISIBLE screen instead of the
- * raw, taskbar-inclusive monitor resolution. Verified against this exact
- * PowerShell invocation before relying on it. Never throws: any failure
- * (non-Windows, PowerShell unavailable, unexpected output, timeout) falls
- * back to DEFAULT_SCREEN_SIZE, so a recording session is never blocked or
- * delayed waiting on this. */
-function detectPrimaryScreenSize(): Promise<{ width: number; height: number }> {
-  if (process.platform !== 'win32') {
-    return Promise.resolve(DEFAULT_SCREEN_SIZE);
-  }
-  return new Promise((resolve) => {
-    const script =
-      'Add-Type -AssemblyName System.Windows.Forms; ' +
-      '$b = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea; ' +
-      'Write-Output "$($b.Width)x$($b.Height)"';
-    execFile(
-      'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-Command', script],
-      { windowsHide: true, timeout: 5000 },
-      (error, stdout) => {
-        const match = !error ? /(\d+)x(\d+)/.exec(stdout) : null;
-        if (!match) {
-          resolve(DEFAULT_SCREEN_SIZE);
-          return;
-        }
-        resolve({ width: parseInt(match[1], 10), height: parseInt(match[2], 10) });
-      }
-    );
-  });
 }
 
 /**

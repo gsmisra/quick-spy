@@ -1,0 +1,77 @@
+[
+  {
+    "case": "first then second java",
+    "scenarioIsolation": "PASS",
+    "outlineRows": "PASS",
+    "selectedSteps": [
+      "    When I add \"<product>\" to my basket",
+      "    When I set quantity to <quantity>",
+      "    Then the basket contains <quantity> items"
+    ],
+    "oldRecordingStillPresent": true,
+    "newBasketLocatorPresent": false,
+    "linkedFeaturePathIncluded": false
+  },
+  {
+    "case": "partial second java",
+    "selectedSteps": [
+      "    When I set quantity to <quantity>",
+      "    Then the basket contains <quantity> items"
+    ],
+    "uncheckedStepAbsent": true,
+    "examplesRetained": true
+  },
+  {
+    "case": "outline then another outline java",
+    "scenarioAndExampleIsolation": "PASS"
+  },
+  {
+    "case": "first then second python",
+    "scenarioIsolation": "PASS",
+    "outlineRows": "PASS",
+    "selectedSteps": [
+      "    When I add \"<product>\" to my basket",
+      "    When I set quantity to <quantity>",
+      "    Then the basket contains <quantity> items"
+    ],
+    "oldRecordingStillPresent": true,
+    "newBasketLocatorPresent": false,
+    "linkedFeaturePathIncluded": false
+  },
+  {
+    "case": "partial second python",
+    "selectedSteps": [
+      "    When I set quantity to <quantity>",
+      "    Then the basket contains <quantity> items"
+    ],
+    "uncheckedStepAbsent": true,
+    "examplesRetained": true
+  },
+  {
+    "case": "outline then another outline python",
+    "scenarioAndExampleIsolation": "PASS"
+  },
+  {
+    "case": "switch during preparation",
+    "fileNameAtStart": "SearchCatalog",
+    "promptNowTargetsSecond": true,
+    "firstRecordingStillPresent": true
+  },
+  {
+    "case": "switch during model response",
+    "currentlyLinked": "Add product to basket",
+    "acceptedOutput": "// Search catalog result",
+    "cancelled": false
+  },
+  {
+    "case": "wrong first-scenario definitions returned for second",
+    "acceptedOutput": "@When(\"I search for {string}\")\npublic void search(String text) {}",
+    "secondScenarioHasThreeSteps": 3
+  },
+  {
+    "case": "second scenario without recording",
+    "warnings": [
+      "Record some user action first before triggering AI analysis"
+    ]
+  }
+]

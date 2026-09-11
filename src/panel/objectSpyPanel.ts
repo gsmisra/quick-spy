@@ -33,6 +33,7 @@ import {
 import { retrieveForOperations, OperationRagCandidate } from '../rag/ragOperationRetrieval';
 import { packOperationCandidates, PackingDiagnostics } from '../rag/ragOperationPacking';
 import { prependRagTraceabilityBanner } from './ragTraceabilityBanner';
+import { findUncoveredSteps } from './stepCoverageChecker';
 import { AgenticModeController } from '../agentic/agenticModeController';
 import { AgenticIngestionPanel } from './agenticIngestionPanel';
 import { getAgenticModeSidebarHtml } from './agenticModeSidebarView';
@@ -144,6 +145,18 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
   // time. Cleared only when the user explicitly unlinks it or links a
   // different one.
   private linkedScenario: LinkedScenario | undefined;
+  // S02: which scenario (by scenarioIdentityKey()), if any, was linked the
+  // LAST time `nativeGeneratedCode` actually changed — i.e. the scenario the
+  // CURRENT recording content can genuinely be said to correspond to.
+  // Stamped only from the `onCodeUpdate` callback below (never from the
+  // "Link Feature file" callback itself), so switching the linked scenario
+  // alone — with no fresh recording captured afterward — leaves this
+  // pointing at whichever scenario the existing recording actually was made
+  // for. `undefined` means either nothing has been recorded yet, or
+  // whatever was recorded happened before any scenario was ever linked
+  // (the common, intentional "record first, link after" flow — not a
+  // mismatch). See recordingMayNotCoverScenario().
+  private recordingAssociatedScenarioKey: string | undefined;
   // API Automation mode's Control Panel request builder, as last sent by
   // "Start AI Code Generation"/"Start AI Feature File Generation" — kept around
   // purely so "Regenerate" (AI Generated Code / Generated Feature File
@@ -187,7 +200,22 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
   // Tracks the in-flight LLM refinement request, if any, so a second one
   // starting (or the view closing) can cancel the previous one cleanly
   // instead of leaving two streams writing into the same AI code view.
+  // Shared between TWO different flows — runLlmRefinement() ("Start AI
+  // Code Generation") and runVerifyFixAgentPath() ("Verify & Fix Code") —
+  // `llmCancellationOwner` below records WHICH one currently owns it, so a
+  // consumer (S01: cancelLinkedGenerationOnScenarioChange()) that only
+  // cares about ONE of the two never accidentally cancels the other.
   private llmCancellation: vscode.CancellationTokenSource | undefined;
+  /** S01: which flow `llmCancellation` currently belongs to — `undefined`
+   * when nothing is in flight. Set immediately alongside `llmCancellation`
+   * at the start of whichever of the two methods actually starts a request
+   * (never inferred after the fact), so `cancelLinkedGenerationOnScenarioChange()`
+   * can tell "the in-flight request depends on `linkedScenario` and must
+   * be cancelled when it changes" apart from "Verify & Fix Code is
+   * running and has nothing to do with the scenario selection" — cancelling
+   * THAT one just because the user browsed to a different Gherkin scenario
+   * would be an unrelated, unwanted side effect. */
+  private llmCancellationOwner: 'linkedGeneration' | 'verifyFix' | undefined;
   // Same, but for an in-flight "Start AI Feature File Generation" request —
   // kept separate from llmCancellation so starting one kind of generation
   // never cancels an unrelated one already in flight for the other panel.
@@ -228,12 +256,39 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
     this.agenticIngestionPanel = new AgenticIngestionPanel(context, this.agenticController);
     this.featureFilePanel = new FeatureFilePanel(
       (scenario) => {
+        // S01: a Standard-mode "Start AI Code Generation" request already
+        // in flight was built from whatever scenario was linked BEFORE
+        // this — see cancelInFlightLinkedGeneration()'s own doc comment
+        // for why letting it complete and land under this NEW scenario's
+        // badge/filename is exactly the reproduced bug this closes.
+        this.cancelInFlightLinkedGeneration();
+        // S02: computed BEFORE `linkedScenario` is reassigned — this is
+        // deliberately a comparison against whatever the EXISTING recording
+        // actually corresponds to, not the new scenario itself.
+        const recordingMismatch = this.recordingMayNotCoverScenario(scenario);
         this.linkedScenario = scenario;
         this.postLinkedScenario();
         this.outputChannel.appendLine(
           `Linked ${scenario.scenarioKind} "${scenario.scenarioName}" from ${scenario.featureFilePath} — ` +
             `${scenario.selectedStepCount}/${scenario.totalStepCount} step(s) selected for AI analysis.`
         );
+        if (recordingMismatch) {
+          // S02: the recording currently sitting in the Playwright Code
+          // editor was last known to correspond to a DIFFERENT scenario (or
+          // none re-verified since) — surfaced immediately, at the moment
+          // the mismatch is introduced, rather than silently letting the
+          // next "Start AI Code Generation" reuse it as if it were valid
+          // grounding for this scenario's own steps.
+          this.outputChannel.appendLine(
+            `Warning: the current Playwright recording was captured for a different linked scenario and has not ` +
+              `been updated since — it may not cover "${scenario.scenarioName}"'s steps. Consider recording again, ` +
+              `or carefully review the generated code for missing/incorrect coverage.`
+          );
+          void vscode.window.showWarningMessage(
+            `SoftPlay: the current recording may not cover "${scenario.scenarioName}"'s steps — it was captured ` +
+              `for a different linked scenario. Consider re-recording before generating code for this scenario.`
+          );
+        }
       },
       (filePath) => {
         this.postFeatureFileAvailable(true);
@@ -246,6 +301,11 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
       this.codegenManager.onLog((message) => this.outputChannel.appendLine(message)),
       this.codegenManager.onCodeUpdate((code) => {
         this.nativeGeneratedCode = code;
+        // S02: stamp whichever scenario is linked RIGHT NOW as the one this
+        // fresh recording content corresponds to — see the field's own doc
+        // comment for why this (not the scenario-link callback) is the only
+        // place this gets updated.
+        this.recordingAssociatedScenarioKey = scenarioIdentityKey(this.linkedScenario);
         this.postCode(true);
       }),
       this.settingsStore.onChange((settings) => {
@@ -433,6 +493,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
         await this.featureFilePanel.reopenLastFile();
         break;
       case 'unlinkFeatureFile':
+        this.cancelInFlightLinkedGeneration(); // S01 — see the FeatureFilePanel selection callback's own comment
         this.linkedScenario = undefined;
         this.postLinkedScenario();
         break;
@@ -548,10 +609,86 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
    * browser and clears the raw Playwright Codegen output; clearApiData()
    * has nothing further to add — there's no browser in API mode).
    */
+  /** S01: cancels an in-flight `runLlmRefinement()` request — NEVER an
+   * in-flight "Verify & Fix Code" one, even though both share
+   * `llmCancellation` — see `llmCancellationOwner`'s own doc comment for
+   * why cancelling the wrong one would be an unrelated, unwanted side
+   * effect of a plain scenario-selection change. Cancellation (rather than
+   * letting the request finish and merely discarding its result) is
+   * deliberate: `runLlmRefinement()`'s own request-identity check (now
+   * ALSO testing `cts.token.isCancellationRequested`, not just
+   * `this.llmCancellation !== cts` — see its own doc comment) will
+   * silently drop that request's result the moment it settles either way,
+   * but actually cancelling stops the underlying Copilot stream/RAG work
+   * promptly instead of letting it run to completion for nothing. A no-op
+   * when nothing linked-scenario-dependent is actually in flight. */
+  private cancelInFlightLinkedGeneration(): void {
+    if (this.llmCancellationOwner === 'linkedGeneration') {
+      this.llmCancellation?.cancel();
+      this.llmCancellation?.dispose();
+      this.llmCancellation = undefined;
+      this.llmCancellationOwner = undefined;
+    }
+  }
+
+  /** S02: true when the Playwright recording currently sitting in the
+   * editor was last known to correspond to a DIFFERENT scenario than
+   * `scenario` (or the recording is stale relative to a scenario switch
+   * that happened since it was captured) — i.e. nothing has re-verified
+   * that this recording actually covers `scenario`'s steps. `false` when
+   * there's no recording yet, or the recording was never associated with
+   * any OTHER scenario (the normal "record first, link after" flow) — see
+   * `recordingAssociatedScenarioKey`'s own doc comment for the full
+   * reasoning. Used both to warn the user the moment a mismatch is
+   * introduced (the "Link Feature file" callback) and to keep the LLM
+   * prompt itself honest about the recording's unverified relevance (see
+   * buildLlmPrompt()). */
+  private recordingMayNotCoverScenario(scenario: LinkedScenario | undefined): boolean {
+    if (!scenario || !this.nativeGeneratedCode.trim()) {
+      return false;
+    }
+    const key = this.recordingAssociatedScenarioKey;
+    return key !== undefined && key !== scenarioIdentityKey(scenario);
+  }
+
+  /** S03: a real response is still ALWAYS published even when this finds
+   * gaps (see both call sites, right after this) — this only reports, it
+   * never blocks or discards a response, since a purely textual heuristic
+   * can't be trusted as a hard gate and the model may well have done a
+   * genuinely good job the check simply couldn't confirm. Surfaced via the
+   * Output channel (a full list, for a permanent record) plus a
+   * non-blocking `showWarningMessage` with a "Show Output" affordance —
+   * same pattern as this file's other post-hoc advisory warnings (e.g. the
+   * RAG freshness check) — rather than a new webview UI surface, keeping
+   * this change confined to objectSpyPanel.ts/stepCoverageChecker.ts. */
+  private reportStepCoverageGaps(linkedScenario: LinkedScenario | undefined, generatedCode: string, language: 'java' | 'python'): void {
+    const uncovered = findUncoveredSteps(linkedScenario, generatedCode, language);
+    if (uncovered.length === 0) {
+      return;
+    }
+    this.outputChannel.appendLine(
+      `Warning: ${uncovered.length} checked step(s) may have NO matching step definition in the generated code ` +
+        `(S03 coverage check — textual heuristic, not a real compile/run check):\n` +
+        uncovered.map((s) => `  - ${s}`).join('\n')
+    );
+    void vscode.window
+      .showWarningMessage(
+        `SoftPlay: the generated code may be missing step definition(s) for ${uncovered.length} of the linked ` +
+          `scenario's step(s) — see the Output channel for which ones.`,
+        'Show Output'
+      )
+      .then((choice) => {
+        if (choice === 'Show Output') {
+          this.outputChannel.show();
+        }
+      });
+  }
+
   private clearSharedLlmContext(): void {
     this.llmCancellation?.cancel();
     this.llmCancellation?.dispose();
     this.llmCancellation = undefined;
+    this.llmCancellationOwner = undefined;
     this.featureGenCancellation?.cancel();
     this.featureGenCancellation?.dispose();
     this.featureGenCancellation = undefined;
@@ -617,6 +754,17 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
       return;
     }
 
+    // S01: snapshotted ONCE here too, for the exact same reason
+    // runLlmRefinement() does — this is a live estimate spanning several
+    // await boundaries of its own, and a scenario switch mid-estimate
+    // should never mix one scenario's mandatory-token measurement with
+    // another's final prompt any more than a real generation should.
+    const linkedScenarioSnapshot = this.linkedScenario;
+    const suggestedBaseName = currentSuggestedBaseName(linkedScenarioSnapshot, settings.language);
+    // S02: same snapshot-time computation runLlmRefinement() does — see
+    // recordingMayNotCoverScenario()'s own doc comment.
+    const recordingMismatch = isApiMode ? false : this.recordingMayNotCoverScenario(linkedScenarioSnapshot);
+
     const instructions = await this.readInstructionFiles(selectedFiles);
     const builtIn = isApiMode ? readApiAutomationInstructions() : readSeniorQeInstructions();
     // Same Auto Password Encryption pass the real send would do (see
@@ -644,8 +792,8 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
           measuredCustomInstructions,
           this.getEncryptSecret(),
           '',
-          this.linkedScenario,
-          this.currentSuggestedBaseName()
+          linkedScenarioSnapshot,
+          suggestedBaseName
         )
       : buildLlmPrompt(
           settings.language,
@@ -656,8 +804,9 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
           measuredCode,
           measuredCustomInstructions,
           '',
-          this.linkedScenario,
-          this.currentSuggestedBaseName()
+          linkedScenarioSnapshot,
+          suggestedBaseName,
+          recordingMismatch
         );
     // F12: resolve ONE model and reuse it for every measurement below,
     // rather than each of the three token counts independently
@@ -679,6 +828,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
       measuredCode,
       apiDetails,
       measuredCustomInstructions,
+      linkedScenarioSnapshot,
       mandatoryTokensForEstimate,
       model
     );
@@ -692,8 +842,8 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
           measuredCustomInstructions,
           this.getEncryptSecret(),
           ragSection,
-          this.linkedScenario,
-          this.currentSuggestedBaseName()
+          linkedScenarioSnapshot,
+          suggestedBaseName
         )
       : buildLlmPrompt(
           settings.language,
@@ -704,8 +854,9 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
           measuredCode,
           measuredCustomInstructions,
           ragSection,
-          this.linkedScenario,
-          this.currentSuggestedBaseName()
+          linkedScenarioSnapshot,
+          suggestedBaseName,
+          recordingMismatch
         );
 
     const sentTokens = model
@@ -808,6 +959,10 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
   private async killAllBrowsers(): Promise<void> {
     await this.codegenManager.stop();
     this.nativeGeneratedCode = '';
+    // S02: a genuine "start this recording completely over" also clears
+    // whatever scenario the (now-gone) recording was associated with — a
+    // brand new recording hasn't been captured under ANY scenario yet.
+    this.recordingAssociatedScenarioKey = undefined;
     this.clearSharedLlmContext();
     // 'clearAll' resets the webview's Playwright Code editor and its own
     // local state (Custom md checkboxes, chat composer) — no need to also
@@ -900,10 +1055,11 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
    * editor's live content (`code`, including manual edits), whichever
    * Custom md files are checked (`selectedFiles`), anything typed into the
    * chat box (`customInstructions`), the linked scenario/selected steps
-   * (this.linkedScenario, read inside runLlmRefinement()), and the current
-   * Settings (browser channel, language, language version — also read
-   * inside runLlmRefinement()). Recording code, checking a box, or typing
-   * in chat never triggers this on their own. */
+   * (this.linkedScenario, SNAPSHOTTED once at the very start of
+   * runLlmRefinement() — see its own doc comment, S01), and the current
+   * Settings (browser channel, language, language version — captured the
+   * same way). Recording code, checking a box, or typing in chat never
+   * triggers this on their own. */
   private async sendToLlm(
     selectedFiles: string[],
     playwrightCode: string,
@@ -1172,6 +1328,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
     this.llmCancellation?.dispose();
     const cts = new vscode.CancellationTokenSource();
     this.llmCancellation = cts;
+    this.llmCancellationOwner = 'verifyFix';
 
     let lastShownCode = initialCode;
     // Tracked from every run_code tool result so the final status — for a
@@ -1554,8 +1711,33 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
     this.llmCancellation?.dispose();
     const cts = new vscode.CancellationTokenSource();
     this.llmCancellation = cts;
+    this.llmCancellationOwner = 'linkedGeneration';
 
-    this.postLlmStart();
+    // S01: snapshotted ONCE, right here, and used for EVERY use below —
+    // never `this.linkedScenario` directly again inside this method. The
+    // reproduced bug this closes: `this.linkedScenario` is a plain mutable
+    // field the Gherkin-scenario picker's own selection callback can
+    // reassign at any moment, including WHILE this method's own async prep
+    // (encryption, RAG retrieval, token counting) is still in flight —
+    // reading it fresh at each of several DIFFERENT points (the suggested
+    // output filename, computed once up front via postLlmStart(); the
+    // mandatory-token-measurement prompt; the final real prompt; the
+    // retry-without-RAG fallback prompt) meant a single request could end
+    // up built from an inconsistent MIX of two different scenarios' own
+    // data, depending on exactly when the selection changed relative to
+    // where execution happened to be. A snapshot guarantees this ONE
+    // request is internally consistent from start to finish, no matter
+    // what the user does to the LIVE selection while it's running.
+    const linkedScenarioSnapshot = this.linkedScenario;
+    const suggestedBaseName = currentSuggestedBaseName(linkedScenarioSnapshot, settings.language);
+    // S02: same snapshot-time computation — see
+    // recordingMayNotCoverScenario()'s own doc comment. Snapshotted here,
+    // alongside the scenario itself, so this one request's prompt stays
+    // internally consistent about whether the recording it embeds was ever
+    // actually verified against this scenario.
+    const recordingMismatch = isApiMode ? false : this.recordingMayNotCoverScenario(linkedScenarioSnapshot);
+
+    this.postLlmStart(suggestedBaseName);
 
     // Everything from here through the actual Copilot call used to be split
     // across an UNGUARDED prep section (encryption, RAG index building,
@@ -1578,6 +1760,17 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
     // If THIS request's own prep/streaming was still in flight when that
     // happened, its eventual result — success or failure — must never
     // clobber the newer request's already-in-progress UI state.
+    //
+    // S01: BOTH checks now ALSO test `cts.token.isCancellationRequested`
+    // directly, not just `this.llmCancellation !== cts` — the identity
+    // check alone only ever catches "a NEWER generation request started."
+    // It says nothing about "the Gherkin scenario selection changed WHILE
+    // this exact request was still the active one" (no new request; same
+    // `cts` throughout) — see `cancelLinkedGenerationOnScenarioChange()`,
+    // which cancels `cts` for exactly that case. Relying on cancellation
+    // status directly (rather than only inferring it from identity) means
+    // this is never accidentally accepted just because nothing NEWER
+    // happened to start.
     let ragSection = '';
     let ragMatches: RagMatch[] = [];
     let builtIn = '';
@@ -1625,8 +1818,8 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
             customInstructions,
             this.getEncryptSecret(),
             '',
-            this.linkedScenario,
-            this.currentSuggestedBaseName()
+            linkedScenarioSnapshot,
+            suggestedBaseName
           )
         : buildLlmPrompt(
             settings.language,
@@ -1637,8 +1830,9 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
             playwrightCode,
             customInstructions,
             '',
-            this.linkedScenario,
-            this.currentSuggestedBaseName()
+            linkedScenarioSnapshot,
+            suggestedBaseName,
+            recordingMismatch
           );
       // F12: resolve ONE model here and reuse this SAME handle for the
       // mandatory-token measurement, RAG packing (buildRagSection), AND
@@ -1661,7 +1855,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
             }
           })()
         : undefined;
-      const built = await this.buildRagSection(settings, isApiMode, playwrightCode, apiDetails, customInstructions, mandatoryTokens, resolvedModel, cts.token);
+      const built = await this.buildRagSection(settings, isApiMode, playwrightCode, apiDetails, customInstructions, linkedScenarioSnapshot, mandatoryTokens, resolvedModel, cts.token);
       ragSection = built.section;
       ragMatches = built.matches;
       const prompt = isApiMode
@@ -1674,8 +1868,8 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
             customInstructions,
             this.getEncryptSecret(),
             ragSection,
-            this.linkedScenario,
-            this.currentSuggestedBaseName()
+            linkedScenarioSnapshot,
+            suggestedBaseName
           )
         : buildLlmPrompt(
             settings.language,
@@ -1686,8 +1880,9 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
             playwrightCode,
             customInstructions,
             ragSection,
-            this.linkedScenario,
-            this.currentSuggestedBaseName()
+            linkedScenarioSnapshot,
+            suggestedBaseName,
+            recordingMismatch
           );
       // Diagnostic trail for exactly the question "was X actually sent, and
       // did a response come back?" — check the SoftPlay Output channel
@@ -1703,14 +1898,14 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
           `${builtIn ? `(${builtIn.length} chars)` : '(MISSING — instructions .md failed to load)'}, ` +
           `${instructions.length} project .md file(s) (${instructionFileChars.toLocaleString()} chars), ` +
           `RAG section (${ragSection.length.toLocaleString()} chars${ragMatches.length ? `, ${ragMatches.length} match(es): ${ragMatches.map((m) => m.id).join(', ')}` : ', no matches'}), ` +
-          `${this.linkedScenario ? `linked scenario "${this.linkedScenario.scenarioName}"` : 'no linked scenario'}, ` +
+          `${linkedScenarioSnapshot ? `linked scenario "${linkedScenarioSnapshot.scenarioName}"` : 'no linked scenario'}${recordingMismatch ? ' (S02: recording UNVERIFIED against this scenario)' : ''}, ` +
           `${isApiMode ? `API request to ${apiDetails?.url}` : `${playwrightCode.length} chars of reference code`} — ` +
           `prompt is ${prompt.length.toLocaleString()} chars total.`
       );
 
       const accumulated = await this.streamCopilotResponse(prompt, settings.copilotModelId, cts, (chunk) => this.postLlmChunk(chunk), resolvedModel);
-      if (this.llmCancellation !== cts) {
-        return; // superseded by a newer request while this one was still in flight — its own UI update wins.
+      if (this.llmCancellation !== cts || cts.token.isCancellationRequested) {
+        return; // superseded by a newer request, OR cancelled without necessarily being replaced (S01: e.g. the linked scenario changed) — its own UI update wins either way.
       }
       this.outputChannel.appendLine(`Copilot response received: ${accumulated.length} chars.`);
       const { code: finalCode, observedMatches } = prependRagTraceabilityBanner(extractCodeBlock(accumulated), ragMatches, settings.language, (p) =>
@@ -1730,6 +1925,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
             (observedMatches.length > 0 ? ` (${observedMatches.map((m) => m.id).join(', ')}).` : '.')
         );
       }
+      this.reportStepCoverageGaps(linkedScenarioSnapshot, finalCode, settings.language);
       this.postLlmDone(finalCode);
       void this.recordReceivedTokens(accumulated, settings.copilotModelId);
     } catch (err) {
@@ -1771,8 +1967,8 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
               customInstructions,
               this.getEncryptSecret(),
               '',
-              this.linkedScenario,
-              this.currentSuggestedBaseName()
+              linkedScenarioSnapshot,
+              suggestedBaseName
             )
           : buildLlmPrompt(
               settings.language,
@@ -1783,17 +1979,20 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
               playwrightCode,
               customInstructions,
               '',
-              this.linkedScenario,
-              this.currentSuggestedBaseName()
+              linkedScenarioSnapshot,
+              suggestedBaseName,
+              recordingMismatch
             );
-        this.postLlmStart();
+        this.postLlmStart(suggestedBaseName);
         try {
           const accumulated = await this.streamCopilotResponse(fallbackPrompt, settings.copilotModelId, cts, (chunk) => this.postLlmChunk(chunk), resolvedModel);
-          if (this.llmCancellation !== cts) {
-            return; // superseded by a newer request while this retry was still in flight.
+          if (this.llmCancellation !== cts || cts.token.isCancellationRequested) {
+            return; // superseded by a newer request, OR cancelled (S01), while this retry was still in flight.
           }
           this.outputChannel.appendLine(`Copilot response received on retry (without RAG): ${accumulated.length} chars.`);
-          this.postLlmDone(extractCodeBlock(accumulated));
+          const fallbackCode = extractCodeBlock(accumulated);
+          this.reportStepCoverageGaps(linkedScenarioSnapshot, fallbackCode, settings.language);
+          this.postLlmDone(fallbackCode);
           void this.recordReceivedTokens(accumulated, settings.copilotModelId);
           return;
         } catch (retryErr) {
@@ -1885,18 +2084,6 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
     return accumulated;
   }
 
-  /** The class name (Java) / module base name (Python) the linked
-   * scenario's own name derives into (see testNaming.ts) for whichever
-   * language is currently selected — undefined when no scenario is linked,
-   * in which case callers fall back to their own generic default. */
-  private currentSuggestedBaseName(): string | undefined {
-    if (!this.linkedScenario) {
-      return undefined;
-    }
-    return this.settingsStore.get().language === 'java'
-      ? this.linkedScenario.javaClassName
-      : this.linkedScenario.pythonModuleName;
-  }
 
   /** Bound `SecretEncryptor` (see api/apiRequestDetails.ts) for this panel's
    * own `context` — API Automation mode's every prompt-building call site
@@ -1916,9 +2103,21 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
    * operation as shared context (`withSharedContext()`), same treatment a
    * scenario's own Background gets — real retrieval-relevant vocabulary,
    * not itself a distinct capability request. */
-  private buildOperationPlan(isApiMode: boolean, playwrightCode: string, apiDetails: ApiRequestDetails | undefined, customInstructions: string): OperationPlan {
-    const basePlan = this.linkedScenario
-      ? planOperationsFromGherkinSteps(this.linkedScenario.stepTexts, this.linkedScenario.backgroundRawText, this.linkedScenario.exampleTexts)
+  /** `linkedScenario` (S01) is passed in explicitly by the caller's own
+   * already-snapshotted value — NEVER read from `this.linkedScenario`
+   * live — so this plan (and everything `buildRagSection()` retrieves
+   * against it) always matches the SAME scenario the rest of that one
+   * request was built from, regardless of what the live selection does
+   * while this request is still in flight. */
+  private buildOperationPlan(
+    isApiMode: boolean,
+    playwrightCode: string,
+    apiDetails: ApiRequestDetails | undefined,
+    customInstructions: string,
+    linkedScenario: LinkedScenario | undefined
+  ): OperationPlan {
+    const basePlan = linkedScenario
+      ? planOperationsFromGherkinSteps(linkedScenario.stepTexts, linkedScenario.backgroundRawText, linkedScenario.exampleTexts)
       : isApiMode && apiDetails
         ? planOperationFromApiRequest(`${apiDetails.method} ${apiDetails.url}`.trim(), extractApiBodyFieldNames(apiDetails))
         : planUnstructuredOperation(isApiMode ? '' : playwrightCode);
@@ -1989,6 +2188,11 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
     playwrightCode: string,
     apiDetails: ApiRequestDetails | undefined,
     customInstructions: string,
+    // S01: the CALLER's own already-snapshotted value — never read live —
+    // so per-operation RAG retrieval always matches the same scenario the
+    // rest of this one request was built from. See buildOperationPlan()'s
+    // own doc comment.
+    linkedScenario: LinkedScenario | undefined,
     mandatoryTokens: number | undefined,
     model?: vscode.LanguageModelChat,
     cancellationToken?: vscode.CancellationToken
@@ -2008,7 +2212,7 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
       return empty;
     }
 
-    const plan = this.buildOperationPlan(isApiMode, playwrightCode, apiDetails, customInstructions);
+    const plan = this.buildOperationPlan(isApiMode, playwrightCode, apiDetails, customInstructions, linkedScenario);
     if (plan.operations.length === 0) {
       return empty;
     }
@@ -2244,9 +2448,9 @@ export class ObjectSpyPanel implements vscode.Disposable, vscode.WebviewViewProv
   // panel — see "Open AI Generated Code"), not the sidebar; the sidebar
   // only gets a lightweight status so there's still feedback when that
   // panel isn't open.
-  private postLlmStart(): void {
+  private postLlmStart(suggestedBaseName: string | undefined): void {
     this.aiCodePanel.setLanguage(this.settingsStore.get().language);
-    this.aiCodePanel.setSuggestedFileName(this.currentSuggestedBaseName());
+    this.aiCodePanel.setSuggestedFileName(suggestedBaseName);
     this.aiCodePanel.startGenerating();
     this.webview?.postMessage({ type: 'aiStatus', payload: { state: 'generating' } });
     // Fresh generation incoming — any prior "Code Correctness Confirmed"
@@ -2790,6 +2994,47 @@ function appendPasswordEncryptionSection(parts: string[], content: string, langu
   }
 }
 
+/** S04: pytest-bdd needs an explicit `@scenario(<path>, '<name>')` binding
+ * per test function — the model has no reliable way to invent the real
+ * relative path to a feature file it never actually receives, and
+ * previously wasn't given one anywhere in the prompt at all (confirmed by
+ * the review: only the feature/scenario NAMES and raw Gherkin text ever
+ * reached the prompt). `''` for Java (Cucumber-JVM discovers step
+ * definitions by classpath scanning — no per-scenario file-path binding
+ * exists to get wrong) or when there's no linked scenario to bind.
+ *
+ * Gives the WORKSPACE-relative path (`vscode.workspace.asRelativePath()` —
+ * the same "identify a file without leaking the machine's own absolute
+ * filesystem layout" convention already used for the RAG traceability
+ * banner) rather than a path relative to wherever the generated test file
+ * will eventually be saved — that location isn't knowable at prompt-build
+ * time, since the user can save the "AI Generated Code" editor's contents
+ * anywhere. The model is told explicitly to adapt the `../` traversal to
+ * wherever it structures the output, but must always resolve to this exact
+ * file, never a placeholder or invented name.
+ *
+ * Also explicitly forbids pytest-bdd's `scenarios(...)` helper (binds
+ * EVERY scenario in a feature file at once) — this generation is scoped to
+ * ONE selected scenario; auto-binding the rest would require step
+ * definitions for scenarios this request was never asked to cover. */
+function buildPythonScenarioBindingSection(language: 'java' | 'python', linkedScenario: LinkedScenario): string {
+  if (language !== 'python') {
+    return '';
+  }
+  const workspaceRelativePath = vscode.workspace.asRelativePath(linkedScenario.featureFilePath);
+  return (
+    `\n## Required pytest-bdd scenario binding (non-negotiable)\n` +
+    `The linked feature file's path, relative to the workspace root, is \`${workspaceRelativePath}\`. Bind this test ` +
+    `function to it with \`@scenario('${workspaceRelativePath}', '${linkedScenario.scenarioName}')\` — pytest-bdd ` +
+    `resolves that path relative to the TEST FILE'S OWN location by default, so adjust the number of \`../\` ` +
+    `segments to wherever you structure the output, but it must always resolve to this exact feature file, never a ` +
+    `placeholder or invented name. Use the scenario name exactly as given above, character for character. Do NOT ` +
+    `use \`scenarios('${workspaceRelativePath}')\` (pytest-bdd's bind-every-scenario-in-the-file helper) — this ` +
+    `request is scoped to ONLY the "${linkedScenario.scenarioName}" scenario; auto-binding every other scenario in ` +
+    `that feature file would require step definitions for scenarios this request was never asked to cover.`
+  );
+}
+
 /** API Automation mode's counterpart to buildFeatureFilePrompt() — same
  * "code/request in, feature file out" shape, just fed the Control Panel's
  * API request details (buildApiRequestSummary()) instead of Playwright
@@ -2926,15 +3171,21 @@ async function buildApiLlmPrompt(
         `exactly ONE file, in exactly ONE fenced code block: the API client AND its BDD step definitions together.`,
       `\`\`\`gherkin\n${[linkedScenario.backgroundRawText, linkedScenario.rawText].filter(Boolean).join('\n\n')}\n\`\`\``
     );
-    if (suggestedClassName && !isPartialSelection) {
-      parts.push(
-        `\n## Required ${language === 'java' ? 'class' : 'module/file'} name (non-negotiable)\n` +
-          (language === 'java'
-            ? `Name the primary public class exactly \`${suggestedClassName}\` (and its file \`${suggestedClassName}.java\`) — ` +
-              `derived from this scenario's own name, so it stays recognizable as the test for THIS scenario.`
-            : `Name the module (test file, without the \`.py\` extension) exactly \`${suggestedClassName}\` — derived ` +
-              `from this scenario's own name, so it stays recognizable as the test for THIS scenario.`)
-      );
+    if (!isPartialSelection) {
+      if (suggestedClassName) {
+        parts.push(
+          `\n## Required ${language === 'java' ? 'class' : 'module/file'} name (non-negotiable)\n` +
+            (language === 'java'
+              ? `Name the primary public class exactly \`${suggestedClassName}\` (and its file \`${suggestedClassName}.java\`) — ` +
+                `derived from this scenario's own name, so it stays recognizable as the test for THIS scenario.`
+              : `Name the module (test file, without the \`.py\` extension) exactly \`${suggestedClassName}\` — derived ` +
+                `from this scenario's own name, so it stays recognizable as the test for THIS scenario.`)
+        );
+      }
+      const pythonBinding = buildPythonScenarioBindingSection(language, linkedScenario);
+      if (pythonBinding) {
+        parts.push(pythonBinding);
+      }
     }
   }
 
@@ -3006,6 +3257,37 @@ function buildFixPrompt(
   );
 
   return parts.join('\n');
+}
+
+/** The class name (Java) / module base name (Python) `linkedScenario`'s own
+ * name derives into (see testNaming.ts) for `language` — `undefined` when
+ * no scenario is linked, in which case callers fall back to their own
+ * generic default.
+ *
+ * S01: a plain, pure free function taking BOTH inputs explicitly, rather
+ * than a method reading `this.linkedScenario`/`this.settingsStore.get().language`
+ * live — every caller (runLlmRefinement(), updateTokenEstimate()) now
+ * passes its own already-SNAPSHOTTED scenario/language, computed once at
+ * the top of that request, so the suggested filename this produces can
+ * never end up describing a different scenario than the prompt/result
+ * built alongside it in that same request. */
+function currentSuggestedBaseName(linkedScenario: LinkedScenario | undefined, language: 'java' | 'python'): string | undefined {
+  if (!linkedScenario) {
+    return undefined;
+  }
+  return language === 'java' ? linkedScenario.javaClassName : linkedScenario.pythonModuleName;
+}
+
+/** S02: a stable identity key for a linked scenario — same shape/kind/name
+ * combination from the same feature file always yields the same key, so it
+ * can be compared across scenario switches without holding onto the whole
+ * (possibly large) `LinkedScenario` object. `undefined` in, `undefined`
+ * out — "no scenario" has no identity to compare. */
+function scenarioIdentityKey(linkedScenario: LinkedScenario | undefined): string | undefined {
+  if (!linkedScenario) {
+    return undefined;
+  }
+  return `${linkedScenario.featureFilePath}::${linkedScenario.scenarioKind}::${linkedScenario.scenarioName}`;
 }
 
 /** Translates CodegenStatus into the PanelStatus shape the webview knows
@@ -3163,7 +3445,16 @@ function buildLlmPrompt(
   /** See buildApiLlmPrompt()'s identical parameter. */
   ragSection: string,
   linkedScenario?: LinkedScenario,
-  suggestedClassName?: string
+  suggestedClassName?: string,
+  /** S02: true when the recording above was last known to correspond to a
+   * DIFFERENT (or no re-verified) linked scenario than `linkedScenario` —
+   * i.e. its relevance to the steps below has never actually been
+   * confirmed. Softens the "reuse its locators as-is"/"match this
+   * structure" language into an explicit, honest caveat instead, so the
+   * model doesn't confidently treat unrelated recorded actions as
+   * sufficient grounding for steps they may not cover. Always `false` for
+   * API Automation mode (buildApiLlmPrompt() has no recording at all). */
+  recordingMayNotCoverScenario?: boolean
 ): string {
   const languageName = language === 'java' ? 'Java (JUnit 5, Playwright for Java)' : 'Python (pytest, Playwright for Python)';
   const versionGuidance = languageVersionGuidance(language, languageVersion);
@@ -3270,8 +3561,24 @@ function buildLlmPrompt(
   // "Auto Password Encryption" (see security/uiPasswordRedactor.ts, applied
   // by the caller before this function ever sees the code) — so the real
   // plaintext value never reaches this prompt in the first place.
+  // S02: when the recording wasn't captured/re-verified for the currently
+  // linked scenario, the confident "match this structure and style, reuse
+  // its locators as-is" framing would tell the model this recording is
+  // known-good grounding for the steps below — it isn't. Replaced with an
+  // explicit caveat instead, so the model treats it only as an unverified
+  // style/locator reference and calls out — rather than silently
+  // fabricates or drops — any linked step it finds no corresponding action
+  // for.
   parts.push(
-    `\n## Reference Playwright-generated code (real \`codegen\` output — see note above about credentials) — match this structure and style, reuse its locators as-is\n\`\`\`${language}\n${playwrightCode}\n\`\`\``
+    recordingMayNotCoverScenario
+      ? `\n## Reference Playwright-generated code (real \`codegen\` output — see note above about credentials) — ` +
+          `⚠ UNVERIFIED against the scenario linked below: this recording was captured for a different (or no ` +
+          `re-confirmed) linked scenario and may not contain any actions relevant to the steps below. Use it only ` +
+          `as a locator/style reference where an action genuinely corresponds to a step below — do NOT assume it ` +
+          `demonstrates every step, do NOT invent actions to make it appear to, and explicitly call out (as a code ` +
+          `comment on that step definition) any linked step below this recording provides no real evidence for.\n` +
+          `\`\`\`${language}\n${playwrightCode}\n\`\`\``
+      : `\n## Reference Playwright-generated code (real \`codegen\` output — see note above about credentials) — match this structure and style, reuse its locators as-is\n\`\`\`${language}\n${playwrightCode}\n\`\`\``
   );
   appendPasswordEncryptionSection(parts, playwrightCode, language);
   if (ragSection) {
@@ -3317,23 +3624,40 @@ function buildLlmPrompt(
             `Produce exactly ONE file, in exactly ONE fenced code block: the refined page object/test code AND its ` +
             `BDD step definitions together, correctly organized and imported as idiomatic for the target language's ` +
             `real BDD framework (Cucumber-JVM for Java, pytest-bdd for Python) — never split this into multiple ` +
-            `files or code blocks.`),
+            `files or code blocks.`) +
+        // S02: restated here too, right next to the actual step list, not
+        // just up in the reference-code section above — this is the LAST
+        // thing the model reads before generating (see the comment on why
+        // this section is placed last), so the caveat needs to survive to
+        // this point rather than being drowned out by everything in between.
+        (recordingMayNotCoverScenario
+          ? ` ⚠ The reference recording above is UNVERIFIED against these specific steps (see its own warning) — for ` +
+            `any step below it provides no real corresponding action for, still produce a correct step definition ` +
+            `using your own best-effort locators/actions for that step, and add a comment on it noting the ` +
+            `recording didn't demonstrate it; never claim or imply the recording covers a step it doesn't.`
+          : ''),
       `\`\`\`gherkin\n${gherkinBlock}\n\`\`\``
     );
     // A snippet has no class of its own to name — this requirement only
     // makes sense for the full-file case.
-    if (suggestedClassName && !isPartialSelection) {
-      parts.push(
-        `\n## Required ${language === 'java' ? 'class' : 'module/file'} name (non-negotiable)\n` +
-          (language === 'java'
-            ? `Name the primary public class exactly \`${suggestedClassName}\` (and its file \`${suggestedClassName}.java\`) — ` +
-              `derived from this scenario's own name, so it stays recognizable as the test for THIS scenario. ` +
-              `Any nested/step-definition class may be named sensibly relative to it, but the primary class itself ` +
-              `must use exactly this name, unchanged.`
-            : `Name the module (test file, without the \`.py\` extension) exactly \`${suggestedClassName}\` and its ` +
-              `top-level test function(s) accordingly (e.g. \`test_${suggestedClassName}\` or similarly derived) — ` +
-              `derived from this scenario's own name, so it stays recognizable as the test for THIS scenario.`)
-      );
+    if (!isPartialSelection) {
+      if (suggestedClassName) {
+        parts.push(
+          `\n## Required ${language === 'java' ? 'class' : 'module/file'} name (non-negotiable)\n` +
+            (language === 'java'
+              ? `Name the primary public class exactly \`${suggestedClassName}\` (and its file \`${suggestedClassName}.java\`) — ` +
+                `derived from this scenario's own name, so it stays recognizable as the test for THIS scenario. ` +
+                `Any nested/step-definition class may be named sensibly relative to it, but the primary class itself ` +
+                `must use exactly this name, unchanged.`
+              : `Name the module (test file, without the \`.py\` extension) exactly \`${suggestedClassName}\` and its ` +
+                `top-level test function(s) accordingly (e.g. \`test_${suggestedClassName}\` or similarly derived) — ` +
+                `derived from this scenario's own name, so it stays recognizable as the test for THIS scenario.`)
+        );
+      }
+      const pythonBinding = buildPythonScenarioBindingSection(language, linkedScenario);
+      if (pythonBinding) {
+        parts.push(pythonBinding);
+      }
     }
   }
 

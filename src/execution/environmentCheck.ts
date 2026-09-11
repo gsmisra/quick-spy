@@ -160,8 +160,9 @@ function tailForMessage(output: string): string {
  * included, no external Node/browser-download step needed for the
  * `executable_path=<real Chrome/Edge>` pattern this extension always uses —
  * see codegenManager.ts) — so only Windows x64 builds are bundled here,
- * matching this extension's existing Windows-only scope (e.g.
- * detectPrimaryScreenSize()). UI mode falls back to the old check-only
+ * matching this extension's existing Windows-only scope (e.g. the
+ * Program Files/LOCALAPPDATA executable-path resolution codegenManager.ts
+ * injects into generated code). UI mode falls back to the old check-only
  * behavior (report what's missing, install nothing) on any other OS.
  *
  * Provisions (once, lazily — reused on every later call) a DEDICATED
